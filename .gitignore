@@ -1,0 +1,42 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# Database
+data/
+*.db
+*.sqlite
+
+# Test artifacts
+.pytest_cache/
+allure-results/
+allure-report/
+htmlcov/
+.coverage
+
+# Generated retest scripts (runtime output)
+retest_scripts/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
