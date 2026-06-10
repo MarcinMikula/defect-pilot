@@ -244,3 +244,172 @@ class TestGetDefectErrors:
 
         with pytest.raises(JiraError):
             reader.get_defect("STWA-1")
+
+
+# ---------------------------------------------------------------------------
+# Comments & Issue Links — fixtures
+# ---------------------------------------------------------------------------
+
+def make_comment_field(author: str, text: str, created: str = "2026-06-10T10:00:00.000+0000") -> dict:
+    return {
+        "author": {"displayName": author},
+        "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": text}]}
+            ],
+        },
+        "created": created,
+    }
+
+
+def make_issue_link(link_type: str, direction: str, related_key: str, summary: str | None = None) -> dict:
+    related = {"key": related_key, "fields": {"summary": summary} if summary else {}}
+    link = {"type": {"name": link_type}}
+    if direction == "inward":
+        link["inwardIssue"] = related
+    else:
+        link["outwardIssue"] = related
+    return link
+
+
+# ---------------------------------------------------------------------------
+# Comments parsing
+# ---------------------------------------------------------------------------
+
+class TestCommentsParsing:
+    def _mock_response(self, payload: dict):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = payload
+        mock_resp.text = ""
+        return mock_resp
+
+    def _payload_with_comments(self, comments: list) -> dict:
+        base = make_jira_response()
+        base["fields"]["comment"] = {"comments": comments}
+        return base
+
+    def test_parses_single_comment(self):
+        reader = make_reader()
+        payload = self._payload_with_comments([
+            make_comment_field("Marcin Nowak", "This is blocked by STWA-1")
+        ])
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-2")
+        assert len(defect.comments) == 1
+        assert defect.comments[0].author == "Marcin Nowak"
+        assert "blocked" in defect.comments[0].body
+
+    def test_parses_multiple_comments(self):
+        reader = make_reader()
+        payload = self._payload_with_comments([
+            make_comment_field("Alice", "First comment"),
+            make_comment_field("Bob", "Second comment"),
+            make_comment_field("Alice", "Third comment"),
+        ])
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-2")
+        assert len(defect.comments) == 3
+        assert defect.comments[1].author == "Bob"
+
+    def test_empty_comments_returns_empty_list(self):
+        reader = make_reader()
+        payload = make_jira_response()
+        payload["fields"]["comment"] = {"comments": []}
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-1")
+        assert defect.comments == []
+
+    def test_missing_comment_field_returns_empty_list(self):
+        reader = make_reader()
+        payload = make_jira_response()
+        payload["fields"].pop("comment", None)
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-1")
+        assert defect.comments == []
+
+
+# ---------------------------------------------------------------------------
+# Issue links parsing
+# ---------------------------------------------------------------------------
+
+class TestIssueLinksParsing:
+    def _mock_response(self, payload: dict):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = payload
+        mock_resp.text = ""
+        return mock_resp
+
+    def _payload_with_links(self, links: list) -> dict:
+        base = make_jira_response()
+        base["fields"]["issuelinks"] = links
+        return base
+
+    def test_parses_inward_link(self):
+        reader = make_reader()
+        payload = self._payload_with_links([
+            make_issue_link("Blocks", "inward", "STWA-1", "Login button broken")
+        ])
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-2")
+        assert len(defect.issue_links) == 1
+        assert defect.issue_links[0].related_issue_key == "STWA-1"
+        assert defect.issue_links[0].direction == "inward"
+        assert defect.issue_links[0].link_type == "Blocks"
+
+    def test_parses_outward_link(self):
+        reader = make_reader()
+        payload = self._payload_with_links([
+            make_issue_link("Blocks", "outward", "STWA-3", "Related issue")
+        ])
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-2")
+        assert defect.issue_links[0].direction == "outward"
+        assert defect.issue_links[0].related_issue_key == "STWA-3"
+
+    def test_parses_related_issue_summary(self):
+        reader = make_reader()
+        payload = self._payload_with_links([
+            make_issue_link("Blocks", "inward", "STWA-1", "Login button broken")
+        ])
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-2")
+        assert defect.issue_links[0].related_issue_summary == "Login button broken"
+
+    def test_locale_agnostic_link_type(self):
+        """Link type name should be stored as-is — no hardcoding or translation."""
+        reader = make_reader()
+        payload = self._payload_with_links([
+            make_issue_link("Blokuje", "inward", "STWA-1")   # Polish locale
+        ])
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-2")
+        assert defect.issue_links[0].link_type == "Blokuje"
+
+    def test_empty_links_returns_empty_list(self):
+        reader = make_reader()
+        payload = self._payload_with_links([])
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-1")
+        assert defect.issue_links == []
+
+    def test_missing_links_field_returns_empty_list(self):
+        reader = make_reader()
+        payload = make_jira_response()
+        payload["fields"].pop("issuelinks", None)
+        reader._client.get = MagicMock(return_value=self._mock_response(payload))
+
+        defect = reader.get_defect("STWA-1")
+        assert defect.issue_links == []

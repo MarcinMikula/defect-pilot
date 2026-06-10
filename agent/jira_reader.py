@@ -41,22 +41,44 @@ class JiraAttachment:
 
 
 @dataclass
+class JiraComment:
+    author: str
+    body: str           # ADF → plain text
+    created: str
+
+
+@dataclass
+class JiraIssueLink:
+    """
+    Represents a link between two Jira issues.
+    Link type names are locale/config-dependent — never hardcode.
+    Examples: "Blocks", "is blocked by", "relates to", "Blokuje" (PL)
+    """
+    link_type: str              # e.g. "Blocks", "relates to"
+    direction: str              # "inward" | "outward"
+    related_issue_key: str
+    related_issue_summary: str | None = None
+
+
+@dataclass
 class JiraDefect:
     """Parsed representation of a Jira issue."""
 
     issue_key: str
     summary: str
-    description: str          # Raw description text (Atlassian Document Format → plain text)
+    description: str            # ADF → plain text
     status: str
-    issue_type: str
+    issue_type: str             # Raw name — locale-dependent ("Bug", "Błąd", "Defect", etc.)
     priority: str
     reporter: str
     assignee: str | None
     environment: str
     labels: list[str] = field(default_factory=list)
     attachments: list[JiraAttachment] = field(default_factory=list)
+    comments: list[JiraComment] = field(default_factory=list)
+    issue_links: list[JiraIssueLink] = field(default_factory=list)
     sprint: str | None = None
-    raw: dict = field(default_factory=dict)   # Full raw Jira REST payload
+    raw: dict = field(default_factory=dict)     # Full raw Jira REST payload
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +88,7 @@ class JiraDefect:
 def _adf_to_text(node: dict | None) -> str:
     """
     Recursively convert Atlassian Document Format (ADF) JSON to plain text.
-    Jira Cloud REST API v3 returns description as ADF, not plain text.
+    Jira Cloud REST API v3 returns description/comments as ADF, not plain text.
     """
     if not node:
         return ""
@@ -104,7 +126,6 @@ class JiraReader:
     Docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/
     """
 
-    # Jira REST API v3 fields we care about
     _FIELDS = [
         "summary",
         "description",
@@ -117,7 +138,8 @@ class JiraReader:
         "labels",
         "attachment",
         "comment",
-        "customfield_10020",  # Sprint
+        "issuelinks",
+        "customfield_10020",    # Sprint
     ]
 
     def __init__(self, base_url: str, email: str, api_token: str):
@@ -139,7 +161,7 @@ class JiraReader:
         Fetch and parse a Jira issue.
 
         Args:
-            issue_key: e.g. "STWA-1"
+            issue_key: e.g. "STWA-2"
 
         Returns:
             Parsed JiraDefect
@@ -159,7 +181,10 @@ class JiraReader:
         data = response.json()
         defect = self._parse(issue_key, data)
 
-        logger.info(f"[JiraReader] Parsed {issue_key} — '{defect.summary}' [{defect.status}]")
+        logger.info(
+            f"[JiraReader] Parsed {issue_key} — '{defect.summary}' [{defect.status}] "
+            f"| comments: {len(defect.comments)} | links: {len(defect.issue_links)}"
+        )
         return defect
 
     def check_connection(self) -> bool:
@@ -224,11 +249,43 @@ class JiraReader:
             for att in fields.get("attachment", [])
         ]
 
-        # Sprint (customfield_10020)
+        # Comments
+        comments = [
+            JiraComment(
+                author=(c.get("author") or {}).get("displayName", "Unknown"),
+                body=_adf_to_text(c.get("body")).strip(),
+                created=c.get("created", ""),
+            )
+            for c in (fields.get("comment") or {}).get("comments", [])
+        ]
+
+        # Issue links — locale-agnostic, store raw link type name
+        issue_links = []
+        for link in fields.get("issuelinks", []):
+            link_type_name = (link.get("type") or {}).get("name", "Unknown")
+
+            if "inwardIssue" in link:
+                related = link["inwardIssue"]
+                issue_links.append(JiraIssueLink(
+                    link_type=link_type_name,
+                    direction="inward",
+                    related_issue_key=related.get("key", ""),
+                    related_issue_summary=(related.get("fields") or {}).get("summary"),
+                ))
+            if "outwardIssue" in link:
+                related = link["outwardIssue"]
+                issue_links.append(JiraIssueLink(
+                    link_type=link_type_name,
+                    direction="outward",
+                    related_issue_key=related.get("key", ""),
+                    related_issue_summary=(related.get("fields") or {}).get("summary"),
+                ))
+
+        # Sprint (customfield_10020) — take last (active) sprint
         sprint = None
         sprint_field = fields.get("customfield_10020")
         if sprint_field and isinstance(sprint_field, list) and sprint_field:
-            sprint = sprint_field[-1].get("name")  # Last (active) sprint
+            sprint = sprint_field[-1].get("name")
 
         return JiraDefect(
             issue_key=issue_key,
@@ -242,6 +299,8 @@ class JiraReader:
             environment=environment,
             labels=labels,
             attachments=attachments,
+            comments=comments,
+            issue_links=issue_links,
             sprint=sprint,
             raw=data,
         )
