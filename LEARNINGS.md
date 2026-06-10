@@ -54,4 +54,38 @@
 
 ---
 
-_Next update: after Sprint 1 — Jira Reader_
+_Next update: after Sprint 2 — AI Enricher_
+
+---
+
+## Sprint 1 — Jira Reader (June 2025)
+
+### 🔍 Technical findings
+
+**Jira REST API v3 returns ADF, not plain text**
+- Description field comes back as Atlassian Document Format (ADF) — nested JSON, not a string.
+- Had to write `_adf_to_text()` recursive parser. Handles: paragraphs, headings, bullet/ordered lists, hard breaks.
+- Lesson: always check the actual API response shape before assuming. RSS export ≠ REST API.
+
+**Project key confirmed: `STWA`**
+- Jira instance: `marcin00001a-1758457062887.atlassian.net`
+- Board is Scrum-based, sprint field is `customfield_10020`
+- Issue type in this project is "Zadanie" (Polish locale) — parser uses `issuetype.name` so locale-agnostic ✅
+
+**No dedicated steps/expected/actual fields**
+- Everything lives in free-text `description`
+- AI enricher (Sprint 2) will need to extract structure from unstructured text
+- This is realistic — 90% of real Jiras look like this
+
+### 🧪 Test results
+
+- 24 unit tests, 24 passed
+- Full mock coverage — no real Jira calls needed in CI
+- Covered: ADF parsing, field mapping, error handling (401/404/500), attachments, sprint, no-assignee edge case
+
+### 📌 Watch out for
+
+- `customfield_10020` (Sprint) is a list — always take the last element (active sprint)
+- Attachment URLs require auth headers to download — relevant for Sprint 2 when we'll process screenshots
+- Rate limits: Jira Cloud allows ~100 req/min on free tier — not an issue for single-issue flow, will matter for batch mode
+
