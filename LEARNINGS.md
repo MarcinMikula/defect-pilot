@@ -89,3 +89,55 @@ _Next update: after Sprint 2 — AI Enricher_
 - Attachment URLs require auth headers to download — relevant for Sprint 2 when we'll process screenshots
 - Rate limits: Jira Cloud allows ~100 req/min on free tier — not an issue for single-issue flow, will matter for batch mode
 
+### ⚠️ Jira configuration variance — critical for adopters
+
+**This is the #1 thing that will break defect-pilot on a new project.**
+
+Every Jira instance is configured differently. Things that vary per project/company:
+
+| Element | This project (STWA) | May look like elsewhere |
+|---------|-------------------|------------------------|
+| Issue type — Task | "Zadanie" | "Task", "Story", "Ticket" |
+| Issue type — Bug | "Błąd" | "Bug", "Defect", "Error", "Problem" |
+| Link type | "Blocks" | "Blokuje" (PL), "Blocks", "is blocked by" — **same relationship, different names** |
+| Steps to reproduce | Inside free-text `description` | Dedicated custom field (`customfield_XXXXX`) |
+| Environment | Standard field (often empty) | Custom field, or inside description |
+| Sprint field | `customfield_10020` | May differ on older Jira versions |
+| Story points | `customfield_10016` | `customfield_10028` or `story_points` depending on Jira version |
+
+**Design decisions made because of this:**
+- `issue_type` stored as raw string — never compared against hardcoded values like `== "Bug"`
+- `link_type` stored as raw string — locale/config agnostic
+- `description` parsed as free text — AI enricher responsible for extracting structure
+- Parser uses defensive `or {}` / `or []` everywhere — missing fields don't crash
+
+**Recommendation for anyone adapting this tool:**
+Run `GET /rest/api/3/issue/{YOUR-ISSUE-KEY}` on your Jira first and inspect the raw JSON.
+Map your custom fields before configuring. A `field_mapping.yml` config is planned for Sprint 5.
+
+---
+
+### 💡 Idea parked for later — retest scheduler
+
+**Context:** In enterprise environments, deployment windows are fixed (e.g. Mon–Fri 13:00–14:00).
+After a deployment window closes, a tester needs to check if any defects moved to "Ready for retest" status — currently done manually by checking email or Jira.
+
+**Proposed feature (Sprint 4 or 5):**
+- Configurable scheduler: set time + days in `.env` or `config.yml`
+- Agent polls Jira after deployment window: finds issues with status "Ready for retest" / "Do retestu" (configurable — locale variance again!)
+- Triggers retest script generation automatically
+- Notifies tester (log, file, optional Slack/email)
+
+**Config sketch:**
+```yaml
+retest_scheduler:
+  enabled: true
+  check_after: "14:00"          # poll after deployment window closes
+  days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+  retest_status: "Ready for retest"   # configurable — locale-dependent!
+  timezone: "Europe/Warsaw"
+```
+
+**Implementation note:** `APScheduler` or simple `schedule` library + cron-style config.
+Status name must be configurable — "Ready for retest", "Do retestu", "Gotowe do retestu" are all the same thing on different projects.
+

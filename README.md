@@ -117,11 +117,11 @@ JIRA_PROJECT_KEY=PROJ
 | Sprint | Focus | Status |
 |--------|-------|--------|
 | Sprint 0 | Repo scaffold, config, AI provider stubs | ✅ Done |
-| Sprint 1 | Jira Reader — connect, parse, extract | 🔄 In Progress |
-| Sprint 2 | AI Enricher — prompt engineering, selectors | ⏳ Planned |
+| Sprint 1 | Jira Reader — connect, parse, extract | ✅ Done |
+| Sprint 2 | AI Enricher — prompt engineering, selectors | 🔄 In Progress |
 | Sprint 3 | Playwright Writer — retest script generation, Shadow DOM | ⏳ Planned |
-| Sprint 4 | DB + Jira Updater — full cycle | ⏳ Planned |
-| Sprint 5 | CLI, CI/CD, Allure, demo GIF | ⏳ Planned |
+| Sprint 4 | DB + Jira Updater + Retest Scheduler | ⏳ Planned |
+| Sprint 5 | CLI, CI/CD, Allure, field_mapping.yml, demo GIF | ⏳ Planned |
 
 ---
 
