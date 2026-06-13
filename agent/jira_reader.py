@@ -179,7 +179,6 @@ class JiraReader:
                 "Content-Type": "application/json",
             },
             timeout=30.0,
-            verify=False,
         )
         logger.info(f"[JiraReader] Initialized — {base_url}")
 
@@ -219,7 +218,8 @@ class JiraReader:
     def download_attachment(self, attachment: JiraAttachment) -> bytes:
         """
         Download attachment content from Jira.
-        Uses stored auth — works for images embedded in description too.
+        Jira Cloud redirects attachment requests to api.media.atlassian.com (303).
+        We follow the redirect but drop auth headers — external domain doesn't need them.
 
         Args:
             attachment: JiraAttachment with url set
@@ -228,7 +228,16 @@ class JiraReader:
             Raw bytes of the attachment
         """
         logger.info(f"[JiraReader] Downloading attachment: {attachment.filename}")
-        response = self._client.get(attachment.url)
+
+        # Step 1: hit Jira endpoint — expect 303 redirect
+        response = self._client.get(attachment.url, follow_redirects=False)
+
+        if response.status_code in (301, 302, 303, 307, 308):
+            redirect_url = response.headers.get("location")
+            logger.debug(f"[JiraReader] Following redirect to: {redirect_url[:80]}...")
+            # Step 2: follow redirect WITHOUT auth headers (external CDN)
+            response = httpx.get(redirect_url, follow_redirects=True, timeout=30.0)
+        
         response.raise_for_status()
         return response.content
 
