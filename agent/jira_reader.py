@@ -237,7 +237,7 @@ class JiraReader:
             redirect_url = response.headers.get("location")
             logger.debug(f"[JiraReader] Following redirect to: {redirect_url[:80]}...")
             # Step 2: follow redirect WITHOUT auth headers (external CDN)
-            response = httpx.get(redirect_url, follow_redirects=True, timeout=30.0)
+            response = httpx.get(redirect_url, follow_redirects=True, timeout=30.0, verify=False)
         
         response.raise_for_status()
         return response.content
