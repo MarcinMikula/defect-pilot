@@ -141,3 +141,64 @@ retest_scheduler:
 **Implementation note:** `APScheduler` or simple `schedule` library + cron-style config.
 Status name must be configurable — "Ready for retest", "Do retestu", "Gotowe do retestu" are all the same thing on different projects.
 
+
+---
+
+## Sprint 2 — AI Enricher (June 2026)
+
+### 🔍 Technical findings
+
+**Jira Cloud attachments redirect to external CDN (303)**
+- `GET /rest/api/3/attachment/content/{id}` returns **303 See Other** — not the file directly.
+- Redirect target: `api.media.atlassian.com` with a signed token in the URL.
+- Fix: manual two-step download — follow redirect WITHOUT auth headers (external CDN doesn't need them).
+- Lesson: always test attachment download separately from metadata parsing. Different code path, different failure modes.
+
+**Screenshots pasted into description = ADF `mediaSingle` nodes**
+- Testers frequently drag & drop screenshots directly into the description field (faster than attachment panel).
+- These appear as `mediaSingle` → `media` ADF nodes with `attrs.id` pointing to the attachment.
+- Same attachment also appears in the `attachment` field — same ID, deduplication needed.
+- `_adf_to_text()` now collects these IDs silently while parsing text.
+
+**Multimodal enrichment — text + vision**
+- `AnthropicProvider` extended with `complete_with_images()` — base64 images as content blocks.
+- `OllamaProvider` text-only for now — vision depends on model (`llava` supports it, `llama3` does not).
+- Graceful fallback: if provider doesn't have `complete_with_images`, enricher falls back to text-only with a warning.
+- Lesson: don't assume vision support — check at runtime, degrade gracefully.
+
+**Prompt engineering — bilingual PL/EN**
+- Defects in Polish projects will have Polish descriptions. AI instructed to respond in the same language as the bug report.
+- Section headers defined in both languages (`KROKI REPRODUKCJI / STEPS TO REPRODUCE`) — parser checks both variants.
+- "Brak" (PL) and "None" (EN) both filtered out as empty values.
+
+**Ollama — not installed by default**
+- Requires separate installation + model download (~2-4GB per model).
+- `WinError 10061` = Ollama process not running, not a config issue.
+- For first-time users: `ollama serve` + `ollama pull llama3.2` are prerequisites.
+- Vision support is model-dependent — document clearly which models support images.
+
+### 🧪 Test results
+
+- 55 unit tests, 55 passed
+- DefectEnricher: 21 new tests — parsing, screenshot handling, prompt building
+- All AI calls mocked — no real API needed in CI
+
+### 📌 Watch out for
+
+- Attachment CDN tokens are time-limited (signed URLs) — don't cache the redirect URL, always re-request via Jira
+- Screenshot MIME type detection: Jira sometimes returns `image/png` even for JPEGs — check extension as fallback
+- AI response parsing is section-header based — if AI changes formatting, parser silently returns empty fields. Add validation in Sprint 4.
+
+### 💡 Ideas parked for later
+
+**Additional AI providers — natural extension of pluggable architecture:**
+
+| Provider | Why interesting |
+|----------|----------------|
+| `gemini` | 1M token context window, native vision, cheaper than Anthropic, free tier in Google AI Studio |
+| `openai` | GPT-4o vision, widely adopted in enterprise |
+
+Both = single new file + one line in `provider_factory.py`. Architecture already supports it.
+
+**Provider comparison table** (planned for Sprint 5 README):
+quality vs cost vs privacy vs vision support vs speed

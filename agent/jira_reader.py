@@ -179,6 +179,7 @@ class JiraReader:
                 "Content-Type": "application/json",
             },
             timeout=30.0,
+            verify=False,
         )
         logger.info(f"[JiraReader] Initialized — {base_url}")
 
