@@ -63,14 +63,17 @@ Your job is to analyze bug reports written by manual testers (often incomplete)
 and extract structured technical information needed to reproduce the bug
 and write automated retest scripts.
 
-The tester may have written a minimal description like "clicked save, got an error"
-and attached a screenshot. Your job is to extract as much useful information as possible.
-
-Always respond in the same language as the bug report (Polish or English).
-Be practical and specific — avoid vague statements.
+CRITICAL RULES:
+- You MUST respond using EXACTLY the section headers shown — do not skip any section
+- You MUST provide a value for every section — never leave a section empty
+- If information is not available, write "Unknown" or "Not visible" — never leave blank
+- Always respond in the same language as the bug report (Polish or English)
+- If screenshots are provided, describe what you see: UI state, error messages, URL in browser bar
+- Be practical and specific — avoid vague statements
 """
 
 ANALYSIS_PROMPT_TEMPLATE = """Analyze this bug report and extract structured information.
+You MUST fill in ALL sections. Do not skip any section.
 
 ## Bug Report
 
@@ -96,34 +99,37 @@ ANALYSIS_PROMPT_TEMPLATE = """Analyze this bug report and extract structured inf
 
 ---
 
-Extract and return the following in this EXACT format (keep the headers):
+YOU MUST respond with ALL sections below in EXACTLY this format.
+Fill every section — write "Unknown" if information is missing, never leave blank:
 
 ### KROKI REPRODUKCJI / STEPS TO REPRODUCE
-(numbered list, be specific, infer missing steps from context)
+1. (first step — infer from context and screenshots)
+2. (next step)
+3. (continue until bug is triggered)
 
 ### EXPECTED RESULT
-(what should happen)
+(what should happen when steps are followed correctly)
 
 ### ACTUAL RESULT
-(what actually happens — use screenshot if available)
+(what actually happens — describe error visible in screenshot if provided)
 
 ### URL
-(URL where bug occurs, or "Unknown" if not mentioned)
+(URL visible in screenshot browser bar, or from description, or "Unknown")
 
 ### ELEMENTY UI / UI ELEMENTS
-(buttons, fields, selectors mentioned or visible — one per line)
+- (button, field, or element name — one per line)
 
 ### KOMUNIKAT BŁĘDU / ERROR MESSAGE
-(exact error text if visible, or "Not visible")
+(exact error text visible in screenshot or description, or "Not visible")
 
 ### POWIĄZANE WYMAGANIA / REQUIREMENT REFS
-(e.g. OPL-SF-008, or "None")
+(requirement codes like OPL-SF-008 found in title/description, or "None")
 
 ### BRAKUJĄCE INFORMACJE / MISSING INFO
-(what's missing that would help reproduce this bug — one per line)
+- (what information is missing to fully reproduce this bug)
 
 ### KOMPLETNOŚĆ / COMPLETENESS SCORE
-(integer 0-100, where 100 = perfectly reproducible without asking questions)
+(single integer 0-100, where 100 = perfectly reproducible without asking questions)
 """
 
 
