@@ -38,6 +38,7 @@ class JiraAttachment:
     url: str
     mime_type: str
     size_bytes: int
+    attachment_id: str = ""     # Jira attachment ID — used to download content
 
 
 @dataclass
@@ -82,13 +83,22 @@ class JiraDefect:
 
 
 # ---------------------------------------------------------------------------
-# ADF → plain text helper
+# ADF → plain text + media extraction
 # ---------------------------------------------------------------------------
 
-def _adf_to_text(node: dict | None) -> str:
+def _adf_to_text(node: dict | None, _media_ids: list | None = None) -> str:
     """
     Recursively convert Atlassian Document Format (ADF) JSON to plain text.
     Jira Cloud REST API v3 returns description/comments as ADF, not plain text.
+
+    Handles mediaSingle/media nodes — images embedded directly in description.
+    Testers often paste screenshots straight into the description field (drag & drop)
+    instead of using the attachment panel. Both cases end up as ADF media nodes
+    AND in the attachment list, but we collect IDs here for completeness.
+
+    Args:
+        node: ADF node dict
+        _media_ids: list to collect attachment IDs found in media nodes (mutated in place)
     """
     if not node:
         return ""
@@ -100,7 +110,16 @@ def _adf_to_text(node: dict | None) -> str:
     if node_type == "text":
         return text
 
-    parts = [_adf_to_text(child) for child in content]
+    # mediaSingle wraps a media node — image pasted/embedded in description
+    # attrs.id is the attachment ID → /rest/api/3/attachment/content/{id}
+    if node_type in ("mediaSingle", "media"):
+        attrs = node.get("attrs", {})
+        media_id = attrs.get("id")
+        if media_id and _media_ids is not None:
+            _media_ids.append(media_id)
+        return ""   # No text to extract from an image node
+
+    parts = [_adf_to_text(child, _media_ids) for child in content]
 
     if node_type in ("paragraph", "heading"):
         return " ".join(parts).strip() + "\n"
@@ -112,6 +131,13 @@ def _adf_to_text(node: dict | None) -> str:
         return "\n"
 
     return " ".join(parts)
+
+
+def _extract_media_ids(adf_node: dict | None) -> list[str]:
+    """Extract all attachment IDs embedded as media nodes in an ADF document."""
+    media_ids: list[str] = []
+    _adf_to_text(adf_node, _media_ids=media_ids)
+    return media_ids
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +187,7 @@ class JiraReader:
         Fetch and parse a Jira issue.
 
         Args:
-            issue_key: e.g. "STWA-2"
+            issue_key: e.g. "STWA-5"
 
         Returns:
             Parsed JiraDefect
@@ -183,9 +209,27 @@ class JiraReader:
 
         logger.info(
             f"[JiraReader] Parsed {issue_key} — '{defect.summary}' [{defect.status}] "
-            f"| comments: {len(defect.comments)} | links: {len(defect.issue_links)}"
+            f"| attachments: {len(defect.attachments)} "
+            f"| comments: {len(defect.comments)} "
+            f"| links: {len(defect.issue_links)}"
         )
         return defect
+
+    def download_attachment(self, attachment: JiraAttachment) -> bytes:
+        """
+        Download attachment content from Jira.
+        Uses stored auth — works for images embedded in description too.
+
+        Args:
+            attachment: JiraAttachment with url set
+
+        Returns:
+            Raw bytes of the attachment
+        """
+        logger.info(f"[JiraReader] Downloading attachment: {attachment.filename}")
+        response = self._client.get(attachment.url)
+        response.raise_for_status()
+        return response.content
 
     def check_connection(self) -> bool:
         """Verify Jira connectivity and credentials."""
@@ -235,19 +279,37 @@ class JiraReader:
         assignee_obj = fields.get("assignee") or {}
         assignee = assignee_obj.get("displayName") if assignee_obj else None
 
-        # Description — ADF → plain text
-        description = _adf_to_text(fields.get("description")).strip()
+        # Description — ADF → plain text + collect embedded media IDs
+        description_adf = fields.get("description")
+        embedded_media_ids = _extract_media_ids(description_adf)
+        description = _adf_to_text(description_adf).strip()
 
-        # Attachments
+        # Attachments from the attachment field
         attachments = [
             JiraAttachment(
                 filename=att.get("filename", ""),
                 url=att.get("content", ""),
                 mime_type=att.get("mimeType", ""),
                 size_bytes=att.get("size", 0),
+                attachment_id=str(att.get("id", "")),
             )
             for att in fields.get("attachment", [])
         ]
+
+        # Merge embedded media IDs — tester may paste screenshot into description
+        # These show up as ADF media nodes AND in attachment list (same ID)
+        # Mark them so enricher knows which ones are inline screenshots
+        existing_ids = {a.attachment_id for a in attachments}
+        for media_id in embedded_media_ids:
+            if media_id not in existing_ids:
+                # Embedded but not in attachment list — add with minimal info
+                attachments.append(JiraAttachment(
+                    filename=f"embedded_{media_id}.png",
+                    url=f"/rest/api/3/attachment/content/{media_id}",
+                    mime_type="image/png",
+                    size_bytes=0,
+                    attachment_id=media_id,
+                ))
 
         # Comments
         comments = [
