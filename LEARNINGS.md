@@ -141,7 +141,6 @@ retest_scheduler:
 **Implementation note:** `APScheduler` or simple `schedule` library + cron-style config.
 Status name must be configurable — "Ready for retest", "Do retestu", "Gotowe do retestu" are all the same thing on different projects.
 
-
 ---
 
 ## Sprint 2 — AI Enricher (June 2026)
@@ -238,3 +237,109 @@ The "klocki" (building blocks) approach:
 
 A finished simple tool beats an unfinished complex one every time.
 Especially for a portfolio. Especially for a solo developer + Claude. 😄
+
+---
+
+## Sprint 2 — field session addendum (June 2026)
+
+### 🐛 ADF HTML injection — deeper than expected
+
+**Salesforce ADF injects `<span>` tags into Jira fields**
+- Salesforce embeds Aura component markup directly into Jira text fields — even the `summary` (title).
+- Example: `<span data-aura-rendered-by="12539:0" class="uiOutputText" data-aura-class="uiOutputText">Mark Status as Complete</span>`
+- This happens because Salesforce's Aura framework intercepts copy-paste and injects its own rendering markup.
+- Fix: `strip_html()` in `jira_reader.py` using `BeautifulSoup` — strips tags, keeps inner text.
+- Commit: `fix: strip HTML tags from Jira fields (Salesforce ADF span injection)`
+
+**⚠️ HTML strip also strips URLs — data loss**
+- `<a href="https://...">` links in the description are stripped along with `<span>` tags.
+- URL of the affected page (critical for retest!) is silently lost.
+- Fix needed: extract `href` attributes from `<a>` tags **before** stripping.
+- Pattern: `[a["href"] for a in soup.find_all("a", href=True)]`
+- Store as `urls` list in enriched issue dict — pass to AI prompt explicitly.
+
+**RSS export ≠ REST API v3 — again**
+- RSS shows HTML-formatted description with `<a href>` visible.
+- REST API v3 returns ADF JSON — URLs live in `{"type": "text", "marks": [{"type": "link", "attrs": {"href": "..."}}]}` nodes.
+- `_adf_to_text()` must also extract link `href` from mark nodes, not just text content.
+
+---
+
+### 🔗 Issue links — not parsed (bug found in field testing)
+
+**`links: 0` reported despite real issue link in Jira**
+- STWA-9 has a "Blocks" relationship with STWA-10 (the requirement Epic).
+- REST API v3 returns `issuelinks` array — but parser returned `links: 0`.
+- Root cause: `issuelinks` field needs to be explicitly requested in `fields=` param **and** parsed separately from `outwardIssue` / `inwardIssue` keys.
+- Fix needed in `jira_reader.py`:
+
+```python
+for link in issue.fields.issuelinks:
+    if hasattr(link, "outwardIssue"):
+        links.append({"key": link.outwardIssue.key, "direction": "outward", "type": link.type.name})
+    elif hasattr(link, "inwardIssue"):
+        links.append({"key": link.inwardIssue.key, "direction": "inward", "type": link.type.name})
+```
+
+**Linked issue = requirement — huge enrichment value**
+- STWA-10 (Epic, "Blocks" STWA-9) contains the functional requirement:
+  *"uprawniony użytkownik ma mieć możliwość utworzenia, zapisania i zmiany statusów Leada"*
+- If enricher fetches linked issues and passes requirement text to AI prompt → much richer context for retest script generation.
+- Priority: fetch linked issues of type Epic/Story — pass as `requirement_context` to `DefectEnricher`.
+
+---
+
+### 💬 Selector in comment — gold for Playwright Writer
+
+**Tester left CSS selector in a comment**
+- STWA-9, comment: `#\31 2497\:0 > div > div.slds-grid.slds-path__action... > button > span`
+- This is a Salesforce LWC dynamically-generated selector — would be nearly impossible to derive from screenshot alone.
+- Comments are already fetched (`comments: 1` in output) — but `DefectEnricher` prompt doesn't currently include comment content.
+- Fix: include comment text in AI prompt. Selectors mentioned in comments → `ui_elements` in enriched output → Playwright `locator()` calls.
+- This is a significant quality boost for Sprint 3 (Playwright Writer).
+
+---
+
+### 🔢 Completeness score parser bug
+
+**Score `10/100` parsed as `101/100`**
+- AI responded with `KOMPLETNOŚĆ: 10 / 100 (...)` — parser extracted `101` instead of `10`.
+- Likely regex issue: captures `10` then appends `1` from surrounding text, or captures `1` from "1 screenshot" and concatenates.
+- Fix: use explicit regex `(\d{1,3})\s*/\s*100` and take only the **first** match, validate range `0–100`.
+
+---
+
+### 🔒 SSL / certifi — Windows Microsoft Store Python
+
+**Python from Microsoft Store doesn't inherit Windows certificate trust chain**
+- `curl` (PowerShell) connected fine — Windows trusted the Atlassian cert.
+- Python `requests` failed with `CERTIFICATE_VERIFY_FAILED` — because MS Store Python uses its own isolated certstore.
+- This is a known issue with `PythonSoftwareFoundation.Python.3.12` from the Store.
+- Fix: `pip install pip-system-certs` — bridges Windows CertStore into Python's SSL context, zero code changes.
+- Alternative: `pip install --upgrade certifi` if the cert bundle is simply outdated.
+- **Lesson:** If it worked before and broke now → suspect certifi bundle rotation or Windows Update touching cert chain. Check Python source (Store vs python.org installer) before debugging code.
+
+---
+
+### 📋 Completeness checklist — proposed standard (Sprint 3 input)
+
+Based on field testing with STWA-9, a defect report is "complete" when it contains:
+
+| Field | Source | Status in STWA-9 |
+|-------|--------|-----------------|
+| Steps to reproduce | description / AI | ✅ extracted by AI |
+| Expected result | description / AI | ✅ extracted |
+| Actual result | description / AI | ✅ extracted |
+| URL / navigation path | description `<a href>` | ❌ stripped by HTML fix — needs URL extractor |
+| Error message | description / screenshot | ✅ AI correctly said "not visible" |
+| Screenshot | attachment | ✅ present |
+| Requirement reference | title / linked issue | ⚠️ title only — linked issue not fetched |
+| CSS/UI selector | comment | ⚠️ present in comment but not passed to AI |
+| Environment (browser, OS, role) | environment field / description | ❌ empty |
+| Assignee / reporter | Jira fields | ✅ |
+
+**Next step:** `jira_writer.py` module — writes missing fields back to Jira as an "🤖 AI Enrichment" section appended to description (non-destructive, original text preserved).
+
+---
+
+_Next update: after Sprint 3 — Playwright Writer_
