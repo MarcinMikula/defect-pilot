@@ -79,14 +79,28 @@ class JiraDefect:
     comments: list[JiraComment] = field(default_factory=list)
     issue_links: list[JiraIssueLink] = field(default_factory=list)
     sprint: str | None = None
-    raw: dict = field(default_factory=dict)     # Full raw Jira REST payload
+    urls: list[str] = field(default_factory=list)   # URLs extracted from description links
+    raw: dict = field(default_factory=dict)         # Full raw Jira REST payload
 
 
 # ---------------------------------------------------------------------------
-# ADF → plain text + media extraction
+# ADF → plain text + media extraction + URL extraction
 # ---------------------------------------------------------------------------
 
 import re as _re_html
+
+
+def _extract_urls_from_html(html: str) -> list[str]:
+    """
+    Extract href values from <a> tags in HTML before stripping.
+    Must be called BEFORE _strip_html — strip removes the tags and loses URLs.
+
+    Salesforce / Jira description HTML example:
+    <a href="https://brave-goat-4r7ip-dev-ed.trailblaze.lightning.force.com/...">https://...</a>
+    """
+    if not html:
+        return []
+    return _re_html.findall(r'<a\s[^>]*href=["\']([^"\']+)["\']', html, _re_html.IGNORECASE)
 
 
 def _strip_html(text: str) -> str:
@@ -95,6 +109,8 @@ def _strip_html(text: str) -> str:
     Salesforce ADF injects raw HTML spans into field values:
     e.g. <span data-aura-rendered-by="...">Mark Status as Complete</span>
     → "Mark Status as Complete"
+
+    Call _extract_urls_from_html() BEFORE this if you need URLs from <a href>.
     """
     if not text:
         return text
@@ -103,7 +119,7 @@ def _strip_html(text: str) -> str:
     return clean
 
 
-def _adf_to_text(node: dict | None, _media_ids: list | None = None) -> str:
+def _adf_to_text(node: dict | None, _media_ids: list | None = None, _urls: list | None = None) -> str:
     """
     Recursively convert Atlassian Document Format (ADF) JSON to plain text.
     Jira Cloud REST API v3 returns description/comments as ADF, not plain text.
@@ -113,9 +129,13 @@ def _adf_to_text(node: dict | None, _media_ids: list | None = None) -> str:
     instead of using the attachment panel. Both cases end up as ADF media nodes
     AND in the attachment list, but we collect IDs here for completeness.
 
+    Also extracts URLs from link marks:
+    ADF link format: {"type": "text", "text": "https://...", "marks": [{"type": "link", "attrs": {"href": "..."}}]}
+
     Args:
         node: ADF node dict
         _media_ids: list to collect attachment IDs found in media nodes (mutated in place)
+        _urls: list to collect URLs found in link marks (mutated in place)
     """
     if not node:
         return ""
@@ -125,6 +145,13 @@ def _adf_to_text(node: dict | None, _media_ids: list | None = None) -> str:
     text = node.get("text", "")
 
     if node_type == "text":
+        # Extract URLs from link marks
+        if _urls is not None:
+            for mark in node.get("marks", []):
+                if mark.get("type") == "link":
+                    href = mark.get("attrs", {}).get("href")
+                    if href and href not in _urls:
+                        _urls.append(href)
         return text
 
     # mediaSingle wraps a media node — image pasted/embedded in description
@@ -136,7 +163,7 @@ def _adf_to_text(node: dict | None, _media_ids: list | None = None) -> str:
             _media_ids.append(media_id)
         return ""   # No text to extract from an image node
 
-    parts = [_adf_to_text(child, _media_ids) for child in content]
+    parts = [_adf_to_text(child, _media_ids, _urls) for child in content]
 
     if node_type in ("paragraph", "heading"):
         return " ".join(parts).strip() + "\n"
@@ -155,6 +182,13 @@ def _extract_media_ids(adf_node: dict | None) -> list[str]:
     media_ids: list[str] = []
     _adf_to_text(adf_node, _media_ids=media_ids)
     return media_ids
+
+
+def _extract_adf_urls(adf_node: dict | None) -> list[str]:
+    """Extract all URLs from link marks in an ADF document."""
+    urls: list[str] = []
+    _adf_to_text(adf_node, _urls=urls)
+    return urls
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +262,8 @@ class JiraReader:
             f"[JiraReader] Parsed {issue_key} — '{defect.summary}' [{defect.status}] "
             f"| attachments: {len(defect.attachments)} "
             f"| comments: {len(defect.comments)} "
-            f"| links: {len(defect.issue_links)}"
+            f"| links: {len(defect.issue_links)} "
+            f"| urls: {len(defect.urls)}"
         )
         return defect
 
@@ -306,10 +341,24 @@ class JiraReader:
         assignee_obj = fields.get("assignee") or {}
         assignee = assignee_obj.get("displayName") if assignee_obj else None
 
-        # Description — ADF → plain text + collect embedded media IDs
+        # Description — ADF → plain text + collect embedded media IDs + URLs
         description_adf = fields.get("description")
-        embedded_media_ids = _extract_media_ids(description_adf)
-        description = _strip_html(_adf_to_text(description_adf).strip())
+        embedded_media_ids: list[str] = []
+        adf_urls: list[str] = []
+        _adf_to_text(description_adf, _media_ids=embedded_media_ids, _urls=adf_urls)
+        description_raw = _adf_to_text(description_adf).strip()
+
+        # Also extract URLs from any HTML in description (Salesforce ADF HTML injection)
+        html_urls = _extract_urls_from_html(description_raw)
+        description = _strip_html(description_raw)
+
+        # Deduplicated URL list — ADF link marks + HTML href attributes
+        seen: set[str] = set()
+        urls: list[str] = []
+        for u in adf_urls + html_urls:
+            if u not in seen:
+                seen.add(u)
+                urls.append(u)
 
         # Attachments from the attachment field
         attachments = [
@@ -391,5 +440,6 @@ class JiraReader:
             comments=comments,
             issue_links=issue_links,
             sprint=sprint,
+            urls=urls,
             raw=data,
         )
