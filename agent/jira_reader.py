@@ -154,6 +154,16 @@ def _adf_to_text(node: dict | None, _media_ids: list | None = None, _urls: list 
                         _urls.append(href)
         return text
 
+    # inlineCard — a URL rendered as a smart link card in Jira editor
+    # e.g. pasting a Salesforce URL creates {"type": "inlineCard", "attrs": {"url": "https://..."}}
+    if node_type == "inlineCard":
+        url = node.get("attrs", {}).get("url")
+        if url:
+            if _urls is not None and url not in _urls:
+                _urls.append(url)
+            return url  # Include URL as text so it appears in plain-text description
+        return ""
+
     # mediaSingle wraps a media node — image pasted/embedded in description
     # attrs.id is the attachment ID → /rest/api/3/attachment/content/{id}
     if node_type in ("mediaSingle", "media"):
