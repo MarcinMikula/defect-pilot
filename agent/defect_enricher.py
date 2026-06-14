@@ -9,6 +9,7 @@ Works with both Anthropic (Claude) and Ollama (local LLM).
 
 import base64
 import logging
+import re
 from dataclasses import dataclass, field
 
 from agent.jira_reader import JiraAttachment, JiraDefect
@@ -310,11 +311,19 @@ class DefectEnricher:
         score_raw = self._extract_value(raw, [
             "KOMPLETNOŚĆ", "COMPLETENESS SCORE"
         ])
+
+        # Fallback: if section parser missed the score, scan raw response directly
+        # Handles formats: "50", "KOMPLETNOŚĆ / COMPLETENESS SCORE\n50", "Score: 75/100"
+        if not score_raw:
+            match = re.search(r'(?:KOMPLETNO[ŚS][ĆC]|COMPLETENESS\s*SCORE)[^\d]*(\d{1,3})', raw, re.IGNORECASE)
+            if match:
+                score_raw = match.group(1)
+
         try:
-            result.completeness_score = int(
-                "".join(c for c in score_raw if c.isdigit())[:3]
-            )
-        except (ValueError, TypeError):
+            digits = re.search(r'\d{1,3}', score_raw)
+            score = int(digits.group()) if digits else 0
+            result.completeness_score = max(0, min(100, score))  # clamp 0-100
+        except (ValueError, TypeError, AttributeError):
             result.completeness_score = 0
 
         return result
@@ -337,9 +346,10 @@ class DefectEnricher:
     def _extract_section_lines(self, text: str, headers: list[str]) -> list[str]:
         """
         Find section by any of the header variants and return its lines.
-        Handles two formats:
-          - Markdown: ### HEADER TEXT     (Claude, structured LLMs)
-          - Plain:    HEADER TEXT:        (llava, older models)
+        Handles three formats:
+          - Markdown:  ### HEADER TEXT        (Claude, structured LLMs)
+          - Bold:      **HEADER TEXT**        (llava bold markdown)
+          - Plain:     HEADER TEXT:           (llava, older models)
         """
         lines = text.split("\n")
         in_section = False
@@ -368,12 +378,32 @@ class DefectEnricher:
         """
         Check if line is a section header and whether it matches our headers.
         Returns (is_any_header, matches_our_headers).
+
+        Supported formats:
+          ### HEADER TEXT               — markdown (Claude)
+          **HEADER TEXT**               — bold markdown (llava)
+          **HEADER TEXT / ALT TEXT**    — bold with slash variant (llava)
+          HEADER TEXT:                  — plain colon (older models)
         """
         # Markdown format: ### HEADER
         if line.startswith("###"):
             header_text = line.lstrip("#").strip().upper()
             matches = any(h.upper() in header_text for h in headers)
             return True, matches
+
+        # Bold markdown format: **HEADER** or **HEADER / ALT**
+        bold_match = re.match(r'^\*\*(.+?)\*\*$', line)
+        if bold_match:
+            header_text = bold_match.group(1).strip().upper()
+            all_keywords = [
+                "KROKI", "STEPS", "EXPECTED", "ACTUAL", "URL",
+                "ELEMENTY", "ELEMENTS", "KOMUNIKAT", "ERROR",
+                "WYMAGANIA", "REQUIREMENT", "BRAKUJ", "MISSING",
+                "KOMPLETNO", "COMPLETENESS", "SCORE"
+            ]
+            if any(kw in header_text for kw in all_keywords):
+                matches = any(h.upper() in header_text for h in headers)
+                return True, matches
 
         # Plain format: HEADER: (llava style)
         if line.endswith(":") and len(line) > 3:
