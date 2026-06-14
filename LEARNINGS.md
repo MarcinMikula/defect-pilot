@@ -202,3 +202,39 @@ Both = single new file + one line in `provider_factory.py`. Architecture already
 
 **Provider comparison table** (planned for Sprint 5 README):
 quality vs cost vs privacy vs vision support vs speed
+
+---
+
+## Architectural decision — scope boundary (June 2026)
+
+### 🤔 The temptation we resisted
+
+During Sprint 2 we considered expanding defect-pilot toward a full enterprise QA platform:
+- Flow library — reusable Playwright step fragments shared across retests
+- POM/SOM framework with auto-generated Page Objects
+- Self-healing selectors (Shadow DOM, Salesforce LWC)
+- Retest scheduler with deployment window awareness
+- Multi-provider AI comparison dashboard
+
+This would have made defect-pilot a genuinely powerful but also genuinely unfinishable solo project.
+
+### ✅ Decision: stay focused on v1 scope
+
+**defect-pilot v1 does exactly four things:**
+1. Reads Jira defect (done ✅)
+2. AI enriches it with technical context (done ✅)
+3. Generates a simple flat Playwright retest script (Sprint 3)
+4. Updates Jira with enriched data + script (Sprint 4)
+
+No POM. No flow library. No self-healing. No framework.
+A flat script that reproduces the bug is already 10x better than nothing.
+
+### 🔮 Where the ambitious stuff goes
+
+The "klocki" (building blocks) approach:
+- `qa-automation-framework` — POM/SOM patterns, already in progress
+- `PhoenixQA` — self-healing, self-training framework concept, parked
+- Future: these projects may be composed into something larger
+
+A finished simple tool beats an unfinished complex one every time.
+Especially for a portfolio. Especially for a solo developer + Claude. 😄
