@@ -86,6 +86,23 @@ class JiraDefect:
 # ADF → plain text + media extraction
 # ---------------------------------------------------------------------------
 
+import re as _re_html
+
+
+def _strip_html(text: str) -> str:
+    """
+    Remove HTML tags from text.
+    Salesforce ADF injects raw HTML spans into field values:
+    e.g. <span data-aura-rendered-by="...">Mark Status as Complete</span>
+    → "Mark Status as Complete"
+    """
+    if not text:
+        return text
+    clean = _re_html.sub(r'<[^>]+>', '', text)
+    clean = _re_html.sub(r'  +', ' ', clean).strip()
+    return clean
+
+
 def _adf_to_text(node: dict | None, _media_ids: list | None = None) -> str:
     """
     Recursively convert Atlassian Document Format (ADF) JSON to plain text.
@@ -179,7 +196,6 @@ class JiraReader:
                 "Content-Type": "application/json",
             },
             timeout=30.0,
-            verify=False,
         )
         logger.info(f"[JiraReader] Initialized — {base_url}")
 
@@ -237,7 +253,7 @@ class JiraReader:
             redirect_url = response.headers.get("location")
             logger.debug(f"[JiraReader] Following redirect to: {redirect_url[:80]}...")
             # Step 2: follow redirect WITHOUT auth headers (external CDN)
-            response = httpx.get(redirect_url, follow_redirects=True, timeout=30.0, verify=False)
+            response = httpx.get(redirect_url, follow_redirects=True, timeout=30.0)
         
         response.raise_for_status()
         return response.content
@@ -277,7 +293,7 @@ class JiraReader:
         fields = data.get("fields", {})
 
         # Core fields
-        summary = fields.get("summary", "")
+        summary = _strip_html(fields.get("summary", ""))
         status = fields.get("status", {}).get("name", "Unknown")
         issue_type = fields.get("issuetype", {}).get("name", "Unknown")
         priority = fields.get("priority", {}).get("name", "Medium")
@@ -293,7 +309,7 @@ class JiraReader:
         # Description — ADF → plain text + collect embedded media IDs
         description_adf = fields.get("description")
         embedded_media_ids = _extract_media_ids(description_adf)
-        description = _adf_to_text(description_adf).strip()
+        description = _strip_html(_adf_to_text(description_adf).strip())
 
         # Attachments from the attachment field
         attachments = [
