@@ -129,8 +129,9 @@ def _adf_to_text(node: dict | None, _media_ids: list | None = None, _urls: list 
     instead of using the attachment panel. Both cases end up as ADF media nodes
     AND in the attachment list, but we collect IDs here for completeness.
 
-    Also extracts URLs from link marks:
-    ADF link format: {"type": "text", "text": "https://...", "marks": [{"type": "link", "attrs": {"href": "..."}}]}
+    Also extracts URLs from link marks and inlineCard nodes:
+    - Link mark: {"type": "text", "marks": [{"type": "link", "attrs": {"href": "..."}}]}
+    - inlineCard: {"type": "inlineCard", "attrs": {"url": "..."}}
 
     Args:
         node: ADF node dict
@@ -277,6 +278,34 @@ class JiraReader:
         )
         return defect
 
+    def get_linked_issues(self, issue_links: list[JiraIssueLink]) -> dict[str, "JiraDefect"]:
+        """
+        Fetch full details of linked issues.
+        Used to pull requirement text from linked Epics/Stories.
+
+        Silently skips issues that fail (not found, no access) — linked issues
+        are supplementary context, not critical path.
+
+        Args:
+            issue_links: list of JiraIssueLink from a parsed defect
+
+        Returns:
+            dict mapping issue_key → JiraDefect for successfully fetched issues
+        """
+        result: dict[str, JiraDefect] = {}
+        for link in issue_links:
+            key = link.related_issue_key
+            if not key or key in result:
+                continue
+            try:
+                result[key] = self.get_defect(key)
+                logger.info(f"[JiraReader] Fetched linked issue: {key}")
+            except JiraNotFoundError:
+                logger.warning(f"[JiraReader] Linked issue not found: {key}")
+            except Exception as e:
+                logger.warning(f"[JiraReader] Could not fetch linked issue {key}: {e}")
+        return result
+
     def download_attachment(self, attachment: JiraAttachment) -> bytes:
         """
         Download attachment content from Jira.
@@ -299,7 +328,7 @@ class JiraReader:
             logger.debug(f"[JiraReader] Following redirect to: {redirect_url[:80]}...")
             # Step 2: follow redirect WITHOUT auth headers (external CDN)
             response = httpx.get(redirect_url, follow_redirects=True, timeout=30.0)
-        
+
         response.raise_for_status()
         return response.content
 
@@ -384,11 +413,9 @@ class JiraReader:
 
         # Merge embedded media IDs — tester may paste screenshot into description
         # These show up as ADF media nodes AND in attachment list (same ID)
-        # Mark them so enricher knows which ones are inline screenshots
         existing_ids = {a.attachment_id for a in attachments}
         for media_id in embedded_media_ids:
             if media_id not in existing_ids:
-                # Embedded but not in attachment list — add with minimal info
                 attachments.append(JiraAttachment(
                     filename=f"embedded_{media_id}.png",
                     url=f"/rest/api/3/attachment/content/{media_id}",

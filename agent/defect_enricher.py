@@ -71,6 +71,12 @@ CRITICAL RULES:
 - Always respond in the same language as the bug report (Polish or English)
 - If screenshots are provided, describe what you see: UI state, error messages, URL in browser bar
 - Be practical and specific — avoid vague statements
+
+ENVIRONMENT ASSUMPTIONS (do not penalize for missing these):
+- Default browser: Chrome
+- Default OS: Windows
+- Application URL provided in description counts as full environment specification
+- Do NOT mark environment as missing if a URL is present in the report
 """
 
 ANALYSIS_PROMPT_TEMPLATE = """Analyze this bug report and extract structured information.
@@ -95,6 +101,8 @@ You MUST fill in ALL sections. Do not skip any section.
 
 **Linked Issues:**
 {issue_links}
+
+{requirement_context}
 
 {screenshot_note}
 
@@ -124,10 +132,10 @@ Fill every section — write "Unknown" if information is missing, never leave bl
 (exact error text visible in screenshot or description, or "Not visible")
 
 ### POWIĄZANE WYMAGANIA / REQUIREMENT REFS
-(requirement codes like OPL-SF-008 found in title/description, or "None")
+(requirement codes like OPL-SF-008 or linked issue keys found in title/description, or "None")
 
 ### BRAKUJĄCE INFORMACJE / MISSING INFO
-- (what information is missing to fully reproduce this bug)
+- (what information is missing to fully reproduce this bug — do NOT list browser or OS)
 
 ### KOMPLETNOŚĆ / COMPLETENESS SCORE
 (single integer 0-100, where 100 = perfectly reproducible without asking questions)
@@ -153,8 +161,9 @@ class DefectEnricher:
         """
         Args:
             ai_provider: Configured AI provider (Anthropic or Ollama)
-            jira_reader: JiraReader instance for downloading attachments.
-                         If None, screenshots won't be analyzed.
+            jira_reader: JiraReader instance for downloading attachments
+                         and fetching linked issues.
+                         If None, screenshots and linked issues won't be fetched.
         """
         self._ai = ai_provider
         self._jira_reader = jira_reader
@@ -178,8 +187,18 @@ class DefectEnricher:
             f"[DefectEnricher] {len(images_b64)} screenshot(s) collected for analysis"
         )
 
+        # Fetch linked issues (requirements, epics) for additional context
+        linked_issues: dict = {}
+        if self._jira_reader and defect.issue_links:
+            linked_issues = self._jira_reader.get_linked_issues(defect.issue_links)
+            if linked_issues:
+                logger.info(
+                    f"[DefectEnricher] Fetched {len(linked_issues)} linked issue(s): "
+                    + ", ".join(linked_issues.keys())
+                )
+
         # Build prompt
-        prompt = self._build_prompt(defect, has_images=len(images_b64) > 0)
+        prompt = self._build_prompt(defect, has_images=len(images_b64) > 0, linked_issues=linked_issues)
 
         # Call AI — with or without images
         if images_b64 and hasattr(self._ai, "complete_with_images"):
@@ -239,7 +258,7 @@ class DefectEnricher:
             return True
         return any(att.filename.lower().endswith(ext) for ext in image_exts)
 
-    def _build_prompt(self, defect: JiraDefect, has_images: bool) -> str:
+    def _build_prompt(self, defect: JiraDefect, has_images: bool, linked_issues: dict) -> str:
         comments_text = "\n".join(
             f"- [{c.author}]: {c.body}" for c in defect.comments
         ) or "None"
@@ -249,6 +268,17 @@ class DefectEnricher:
             + (f" — {l.related_issue_summary}" if l.related_issue_summary else "")
             for l in defect.issue_links
         ) or "None"
+
+        # Requirement context — full description of linked issues
+        requirement_context = ""
+        if linked_issues:
+            parts = ["**Requirement Details (from linked issues):**"]
+            for key, issue in linked_issues.items():
+                parts.append(
+                    f"\n[{key}] {issue.issue_type}: {issue.summary}\n"
+                    f"{issue.description or 'No description.'}"
+                )
+            requirement_context = "\n".join(parts)
 
         screenshot_note = (
             "**Screenshots:** Attached above — analyze them for error messages, "
@@ -269,6 +299,7 @@ class DefectEnricher:
             description=defect.description or "No description provided.",
             comments=comments_text,
             issue_links=links_text,
+            requirement_context=requirement_context,
             screenshot_note=screenshot_note,
         )
 
@@ -385,6 +416,13 @@ class DefectEnricher:
           **HEADER TEXT / ALT TEXT**    — bold with slash variant (llava)
           HEADER TEXT:                  — plain colon (older models)
         """
+        all_keywords = [
+            "KROKI", "STEPS", "EXPECTED", "ACTUAL", "URL",
+            "ELEMENTY", "ELEMENTS", "KOMUNIKAT", "ERROR",
+            "WYMAGANIA", "REQUIREMENT", "BRAKUJ", "MISSING",
+            "KOMPLETNO", "COMPLETENESS", "SCORE"
+        ]
+
         # Markdown format: ### HEADER
         if line.startswith("###"):
             header_text = line.lstrip("#").strip().upper()
@@ -395,12 +433,6 @@ class DefectEnricher:
         bold_match = re.match(r'^\*\*(.+?)\*\*$', line)
         if bold_match:
             header_text = bold_match.group(1).strip().upper()
-            all_keywords = [
-                "KROKI", "STEPS", "EXPECTED", "ACTUAL", "URL",
-                "ELEMENTY", "ELEMENTS", "KOMUNIKAT", "ERROR",
-                "WYMAGANIA", "REQUIREMENT", "BRAKUJ", "MISSING",
-                "KOMPLETNO", "COMPLETENESS", "SCORE"
-            ]
             if any(kw in header_text for kw in all_keywords):
                 matches = any(h.upper() in header_text for h in headers)
                 return True, matches
@@ -408,12 +440,6 @@ class DefectEnricher:
         # Plain format: HEADER: (llava style)
         if line.endswith(":") and len(line) > 3:
             header_text = line.rstrip(":").strip().upper()
-            all_keywords = [
-                "KROKI", "STEPS", "EXPECTED", "ACTUAL", "URL",
-                "ELEMENTY", "ELEMENTS", "KOMUNIKAT", "ERROR",
-                "WYMAGANIA", "REQUIREMENT", "BRAKUJ", "MISSING",
-                "KOMPLETNO", "COMPLETENESS", "SCORE"
-            ]
             if any(kw in header_text for kw in all_keywords):
                 matches = any(h.upper() in header_text for h in headers)
                 return True, matches
