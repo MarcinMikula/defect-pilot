@@ -14,28 +14,16 @@
 
 ## 🧠 The problem
 
-A Jira defect from a manual tester can look like this:
+Manual testers find bugs. They write tickets. Devs can't reproduce them. Retests take forever.
 
-> **Title:** "OPL-SF-008 — Cannot save individual customer account,
-> clicking Save results in an error"
->
-> **Description:** "I was testing individual customer account creation.
-> After filling in the form and entering the PESEL number I clicked Save
-> and got a validation error. Same issue when entering postal code.
-> See screenshot."
->
-> **Attachment:** screenshot.png *(problematic element circled in Paint)*  
-> **Steps to reproduce:** *(empty or vague)*  
-> **Selectors / element IDs:** *(never)*
+A realistic Jira defect from a manual tester looks like this:
 
-The tester knows what they did and what they expected. The screenshot
-shows the outcome — the body at the crime scene. But without reproduction
-steps and element selectors, the dev still plays detective, and the tester
-doing retest still clicks through the whole flow manually.
+> **Title:** "Nie działa przycisk zapisz"  
+> **Description:** "kliknąłem w zapisz i nic się nie stało"  
+> **Attachment:** screenshot.png
 
-**defect-pilot fills that gap** — it reconstructs the steps from context,
-identifies UI elements from screenshots, and generates an automated retest
-script. Root cause analysis stays with the dev. Everything else gets automated.
+That's it. No steps. No environment. No selectors. No expected vs actual.  
+For a dev — impossible to reproduce. For a tester doing retest — manual clicking all over again.
 
 ---
 
@@ -63,9 +51,9 @@ Jira defect (minimal)
 |-------|--------|
 | Structured reproduction steps | Description text + screenshot |
 | Expected vs actual result | Inferred from context |
-| URL where bug occurred | Description or screenshot |
-| UI elements & selectors | Screenshot analysis |
-| Error message | Screenshot (vision) |
+| URL where bug occurred | Description or screenshot browser bar |
+| Likely UI controls inferred from context | Screenshot + description |
+| Error message (if visible) | Screenshot (vision) or description text |
 | Requirement references | e.g. `OPL-SF-008` found in description |
 | Completeness score (0-100) | How reproducible is this ticket? |
 | Missing information | What the tester forgot to write |

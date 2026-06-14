@@ -101,6 +101,9 @@ def main():
 
     print(f"\n📸 Screenshots analyzed: {enriched.screenshots_analyzed}")
     print("\n" + "="*60)
+    print("🔍 RAW AI RESPONSE (debug)")
+    print("="*60)
+    print(enriched.raw_ai_response)
     print("✅ Sprint 2 live test complete!")
     print("="*60 + "\n")
 

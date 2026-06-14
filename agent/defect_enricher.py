@@ -335,24 +335,57 @@ class DefectEnricher:
         return items
 
     def _extract_section_lines(self, text: str, headers: list[str]) -> list[str]:
-        """Find section by any of the header variants and return its lines."""
+        """
+        Find section by any of the header variants and return its lines.
+        Handles two formats:
+          - Markdown: ### HEADER TEXT     (Claude, structured LLMs)
+          - Plain:    HEADER TEXT:        (llava, older models)
+        """
         lines = text.split("\n")
         in_section = False
         result = []
 
         for line in lines:
             stripped = line.strip()
+            is_header, matches = self._is_section_header(stripped, headers)
 
-            # Check if this line is our section header
-            if stripped.startswith("###"):
-                header_text = stripped.lstrip("#").strip().upper()
-                if any(h.upper() in header_text for h in headers):
+            if is_header:
+                if matches:
                     in_section = True
                     continue
                 elif in_section:
-                    break   # Hit next section — stop
+                    break  # Hit next section
 
             if in_section and stripped:
+                # Skip parenthetical placeholders like (Unknown) or (Not visible)
+                if stripped.startswith("(") and stripped.endswith(")"):
+                    continue
                 result.append(stripped)
 
         return result
+
+    def _is_section_header(self, line: str, headers: list[str]) -> tuple[bool, bool]:
+        """
+        Check if line is a section header and whether it matches our headers.
+        Returns (is_any_header, matches_our_headers).
+        """
+        # Markdown format: ### HEADER
+        if line.startswith("###"):
+            header_text = line.lstrip("#").strip().upper()
+            matches = any(h.upper() in header_text for h in headers)
+            return True, matches
+
+        # Plain format: HEADER: (llava style)
+        if line.endswith(":") and len(line) > 3:
+            header_text = line.rstrip(":").strip().upper()
+            all_keywords = [
+                "KROKI", "STEPS", "EXPECTED", "ACTUAL", "URL",
+                "ELEMENTY", "ELEMENTS", "KOMUNIKAT", "ERROR",
+                "WYMAGANIA", "REQUIREMENT", "BRAKUJ", "MISSING",
+                "KOMPLETNO", "COMPLETENESS", "SCORE"
+            ]
+            if any(kw in header_text for kw in all_keywords):
+                matches = any(h.upper() in header_text for h in headers)
+                return True, matches
+
+        return False, False
