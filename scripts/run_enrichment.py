@@ -1,9 +1,13 @@
 """
-Live integration test — STWA-5
-Runs against real Jira instance and real AI provider.
-Usage: python scripts/test_live_stwa5.py
+defect-pilot — live enrichment runner.
+Fetches a Jira issue, enriches it with AI, and prints structured results.
+
+Usage:
+    python scripts/run_enrichment.py --issue STWA-9
+    python scripts/run_enrichment.py --issue STWA-5 --debug
 """
 
+import argparse
 import logging
 import os
 import sys
@@ -18,14 +22,39 @@ from agent.jira_reader import JiraReader
 from agent.defect_enricher import DefectEnricher
 from ai.provider_factory import get_provider
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="defect-pilot — AI-powered Jira defect enrichment",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+examples:
+  python scripts/run_enrichment.py --issue STWA-9
+  python scripts/run_enrichment.py --issue STWA-9 --debug
+        """
+    )
+    parser.add_argument(
+        "--issue", "-i",
+        required=True,
+        help="Jira issue key (e.g. STWA-9, PROJ-123)"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print raw AI response for debugging"
+    )
+    return parser.parse_args()
 
 
 def main():
-    print("\n🛩️  defect-pilot — live test on STWA-5\n")
+    args = parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s"
+    )
+
+    print(f"\n🛩️  defect-pilot — enriching {args.issue}\n")
 
     config = load_config()
     print(f"✅ Config loaded — AI provider: {config.ai.provider}")
@@ -42,13 +71,15 @@ def main():
         sys.exit(1)
     print("✅ Jira connected")
 
-    print("\n📥 Fetching STWA-5...")
-    defect = reader.get_defect("STWA-5")
+    print(f"\n📥 Fetching {args.issue}...")
+    defect = reader.get_defect(args.issue)
     print(f"✅ Fetched: '{defect.summary}'")
     print(f"   Status:      {defect.status}")
     print(f"   Type:        {defect.issue_type}")
+    print(f"   Priority:    {defect.priority}")
     print(f"   Attachments: {len(defect.attachments)}")
     print(f"   Comments:    {len(defect.comments)}")
+    print(f"   Links:       {len(defect.issue_links)}")
     if defect.description:
         print(f"   Description: {defect.description[:120]}...")
     else:
@@ -57,7 +88,7 @@ def main():
     if defect.attachments:
         print("\n📎 Attachments:")
         for att in defect.attachments:
-            print(f"   - {att.filename} ({att.mime_type}, {att.size_bytes} bytes, id={att.attachment_id})")
+            print(f"   - {att.filename} ({att.mime_type}, {att.size_bytes} bytes)")
 
     print(f"\n🤖 Initializing AI provider: {config.ai.provider}...")
     provider = get_provider(config.ai)
@@ -68,7 +99,7 @@ def main():
     enriched = enricher.enrich(defect)
 
     print("\n" + "="*60)
-    print("📊 ENRICHMENT RESULTS")
+    print(f"📊 ENRICHMENT RESULTS — {args.issue}")
     print("="*60)
 
     print(f"\n🎯 Completeness score: {enriched.completeness_score}/100")
@@ -77,8 +108,8 @@ def main():
     for i, step in enumerate(enriched.steps_to_reproduce, 1):
         print(f"   {i}. {step}")
 
-    print(f"\n✅ Expected:\n   {enriched.expected_result}")
-    print(f"\n❌ Actual:\n   {enriched.actual_result}")
+    print(f"\n✅ Expected:\n   {enriched.expected_result or '(not extracted)'}")
+    print(f"\n❌ Actual:\n   {enriched.actual_result or '(not extracted)'}")
 
     if enriched.url:
         print(f"\n🔗 URL: {enriched.url}")
@@ -100,11 +131,15 @@ def main():
             print(f"   - {m}")
 
     print(f"\n📸 Screenshots analyzed: {enriched.screenshots_analyzed}")
+
+    if args.debug:
+        print("\n" + "="*60)
+        print("🔬 RAW AI RESPONSE (--debug)")
+        print("="*60)
+        print(enriched.raw_ai_response)
+
     print("\n" + "="*60)
-    print("🔍 RAW AI RESPONSE (debug)")
-    print("="*60)
-    print(enriched.raw_ai_response)
-    print("✅ Sprint 2 live test complete!")
+    print(f"✅ Done — {args.issue}")
     print("="*60 + "\n")
 
 
