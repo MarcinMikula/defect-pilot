@@ -388,7 +388,7 @@ class DefectEnricher:
         # Prevents model strictness (penalizing missing OS/browser) from masking
         # reports that are actually well-formed and reproducible.
         # A true zero (empty report) will also score 0 here — no false positives.
-        if result.completeness_score == 0:
+        if result.completeness_score < 30:
             result.completeness_score = self._heuristic_score(result)
             if result.completeness_score > 0:
                 logger.debug(
