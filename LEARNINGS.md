@@ -343,3 +343,43 @@ Based on field testing with STWA-9, a defect report is "complete" when it contai
 ---
 
 _Next update: after Sprint 3 — Playwright Writer_
+
+---
+
+## Sprint 3 — pre-kickoff notes (June 2026)
+
+### 🧪 Test Data Problem — parked for Sprint 3
+
+**Context:** STWA-9 bug report contains a direct link to a specific Salesforce Lead:
+`https://brave-goat-4r7ip-dev-ed.trailblaze.lightning.force.com/lightning/r/Lead/00Qd200000XByc9EAD/view`
+
+A retest script navigating to this hardcoded URL will fail if:
+- The Lead was closed, converted, or deleted
+- The Lead status was manually changed (bug "fixed" but not via proper flow)
+- The environment was refreshed with new data
+
+**This is the #1 reliability problem for business application retest scripts.**
+It's not a Playwright problem — it's a test data lifecycle problem.
+
+**Strategies considered for Sprint 3 (v1 = flat script):**
+
+| Strategy | Complexity | Notes |
+|----------|-----------|-------|
+| **Parametrize via CLI** `--lead-id` | Low ✅ | Tester provides fresh ID before run. Simple, explicit. v1 choice. |
+| Fixture setup — create Lead before test | Medium | Script creates Lead via UI/API, uses its ID, deletes after. Brittle for UI-based creation. |
+| Query for open Lead | Medium | Playwright + Salesforce API query. Requires API access config. |
+| `test_data.json` alongside script | Low | Tester edits JSON before run. Less elegant than CLI but works. |
+
+**Decision for v1:** CLI parametrization — `--lead-id` optional arg.
+- If provided: script uses it directly
+- If not provided: script uses URL from enriched defect (best-effort, may be stale)
+- Script prints a warning if navigating to a hardcoded ID
+
+**Broader lesson:** Any retest script for a CRUD application needs to answer:
+*"Where does the test data come from, and who is responsible for its state?"*
+This question should be in the AI prompt for Sprint 3 — ask AI to identify
+what data the test needs and flag hardcoded IDs as parametrization candidates.
+
+---
+
+_Next update: after Sprint 3 — Playwright Writer_
