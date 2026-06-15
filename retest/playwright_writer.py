@@ -173,9 +173,19 @@ class PlaywrightWriter:
     # Private builders
     # ------------------------------------------------------------------
 
+    def _clean_url(self, url: str) -> str:
+        """Strip markdown angle brackets from URL.
+        llava sometimes returns <https://...> instead of https://...
+        """
+        import re as _re
+        url = url.strip().strip("<>").strip()
+        # Also handle cases like <https://...> inside text
+        match = _re.search(r'https?://[^\s<>]+', url)
+        return match.group() if match else url
+
     def _build_test_data(self, enriched: EnrichedDefect) -> str:
         """Build test data requirements section."""
-        url = enriched.url or ""
+        url = self._clean_url(enriched.url or "")
         has_url = bool(url) and url.lower() not in ("unknown", "nie podano", "")
 
         # Detect hardcoded record IDs in URL (Salesforce pattern: /r/Object/ID/view)
@@ -270,12 +280,12 @@ class PlaywrightWriter:
         """
         step_lower = step.lower()
 
-        # Navigation
+        # Navigation — skip if this is just navigating to the record URL (already done in Navigate section)
         if any(w in step_lower for w in ("navigate", "go to", "open", "przejdź", "otwórz", "http")):
             url_match = re.search(r'https?://\S+', step)
             if url_match:
-                return f'page.goto("{url_match.group()}")'
-            return 'page.goto(RECORD_URL)  # TODO: verify URL'
+                return f'# Navigation already handled above (page.goto(RECORD_URL))'
+            return '# Navigation already handled above (page.goto(RECORD_URL))'
 
         # Click with known selector
         for keyword, selector in selectors.items():
