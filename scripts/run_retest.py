@@ -13,6 +13,9 @@ import os
 import sys
 from pathlib import Path
 
+# Ensure project root is on path when running as script
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -41,18 +44,18 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Config
     # ------------------------------------------------------------------
-    from config.settings import Settings
-    settings = Settings()
-    print(f"✅ Config loaded — AI provider: {settings.ai_provider}")
+    from config.settings import load_config
+    config = load_config()
+    print(f"✅ Config loaded — AI provider: {config.ai.provider}")
 
     # ------------------------------------------------------------------
     # Jira
     # ------------------------------------------------------------------
     from agent.jira_reader import JiraReader
     reader = JiraReader(
-        base_url=settings.jira_base_url,
-        email=settings.jira_email,
-        api_token=settings.jira_api_token,
+        base_url=config.jira.base_url,
+        email=config.jira.email,
+        api_token=config.jira.api_token,
     )
 
     print("📡 Checking Jira connection...")
@@ -83,11 +86,11 @@ def main() -> None:
     # ------------------------------------------------------------------
     # AI enrichment
     # ------------------------------------------------------------------
-    from ai.provider_factory import create_provider
+    from ai.provider_factory import get_provider
     from agent.defect_enricher import DefectEnricher
 
-    print(f"\n🤖 Initializing AI provider: {settings.ai_provider}...")
-    ai = create_provider(settings)
+    print(f"\n🤖 Initializing AI provider: {config.ai.provider}...")
+    ai = get_provider(config.ai)
     print("✅ Provider ready\n")
 
     print("🔍 Enriching defect with AI...")

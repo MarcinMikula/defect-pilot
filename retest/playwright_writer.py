@@ -15,7 +15,7 @@ Why flat script (not POM):
 Salesforce / Shadow DOM note:
 - SF LWC components use Shadow DOM — standard CSS selectors won't pierce it
 - Playwright pierce syntax: page.locator("pierce/#selector")
-- Aura component IDs (e.g. #\31 2497\:0) are dynamic — change between sessions/releases
+- Aura component IDs (e.g. #\\31 2497\\:0) are dynamic — change between sessions/releases
 - AI-extracted selectors from comments are hints, not guaranteed stable
 - Always verify selectors manually before adding to CI
 """
