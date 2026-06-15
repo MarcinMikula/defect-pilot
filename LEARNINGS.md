@@ -383,3 +383,80 @@ what data the test needs and flag hardcoded IDs as parametrization candidates.
 ---
 
 _Next update: after Sprint 3 — Playwright Writer_
+
+---
+
+## Sprint 2 — field testing observations (June 2026)
+
+### 🧪 Multi-ticket testing — llava behavior patterns
+
+**Tested on:** STWA-9 (Lead status bug), STWA-12 (UX/frontend bug), STWA-13 (Opportunity save error)
+
+**llava strengths:**
+- Picks up URL from comments when missing from description (STWA-13) ✅
+- Correctly scores incomplete reports lower (STWA-12: 50/100, STWA-13: 50/100) ✅
+- Extracts error message from title when description is empty ✅
+- Reads screenshot and identifies visible UI state ✅
+
+**llava weaknesses / watch out for:**
+- Hallucinates URLs when none present — returns `example-frontend.com` instead of "Unknown" (STWA-12)
+- Mutates Polish section headers with random characters: `BRAKUJĄCe`, `BRAKUJĄCią`, `KOMPLETNÓŚĆ` — parser misses these sections
+- Completeness score wildly inconsistent: 0, 10, 50, 100 for similar quality reports — heuristic fallback `< 30` partially compensates
+- Copies CSS selector into unrelated sections (requirement refs, error message) when uncertain
+
+**Parser robustness — known gap:**
+- `_is_section_header()` handles `###`, `**HEADER**`, `HEADER:` — but llava sometimes outputs `**HEADER:**` (bold + colon) which doesn't match either pattern
+- Polish diacritic mutations in headers (`BRAKUJĄCe` vs `BRAKUJĄCE`) cause silent section misses
+- Fix idea: fuzzy match on first 6 chars of header keyword instead of exact `in` check
+
+---
+
+### 🛡️ Issue type guard — planned addition
+
+**Problem found in field testing:** Nothing stops a tester from running defect-pilot on an Epic, Story, or Task. Enriching a requirement as if it were a bug produces nonsense output and wastes AI compute.
+
+**Planned fix — `enrich()` guard in `DefectEnricher`:**
+```python
+SUPPORTED_ISSUE_TYPES = {"bug", "błąd", "defect", "error", "problem"}
+
+if defect.issue_type.lower() not in SUPPORTED_ISSUE_TYPES:
+    raise UnsupportedIssueTypeError(
+        f"Issue type '{defect.issue_type}' is not supported. "
+        f"defect-pilot analyzes bugs only."
+    )
+```
+
+**Key design constraint — locale variance:**
+- "Błąd" (PL) = "Bug" (EN) = same thing, different Jira configs
+- Must be configurable via `.env`: `SUPPORTED_ISSUE_TYPES=błąd,bug,defect`
+- Default set covers most common names across EN/PL projects
+- One client may call it "Bug", another "Błąd", another "Defect" — never hardcode
+
+---
+
+### 🎬 Video attachments — parked for later
+
+**Context:** Manual testers sometimes record screen walkthroughs (`.mp4`, `.mov`) instead of writing steps — faster for them, shows the exact path to the bug.
+
+**Current behavior:** `_is_image()` filters by MIME type and extension — videos silently skipped (not downloaded, not sent to AI). No warning shown.
+
+**Planned fix:** Log explicit warning when video attachment detected:
+```
+[WARNING] Video attachment skipped: walkthrough.mp4 — video analysis not supported
+```
+
+**Future (Sprint 5+):** Extract keyframes via `ffmpeg`, send as images to vision model. Technically feasible but significant complexity — parked. Would need: ffmpeg installed, frame sampling strategy, token budget management for multiple frames.
+
+---
+
+### 🔗 URL in comments — already works, worth documenting
+
+**STWA-13 finding:** Tester put the Opportunity URL in a comment, not in the description. llava picked it up correctly because comments are included in the AI prompt.
+
+**However:** `jira_reader.py` only extracts URLs from description ADF — not from comment bodies. If we want `defect.urls` to include URLs from comments, need to add URL extraction to comment parsing (same `_extract_urls_from_html` + ADF link mark logic).
+
+**Current state:** Works via AI reading comment text → AI includes URL in output. Direct URL extraction from comments = future improvement.
+
+---
+
+_Next update: after Sprint 3 — Playwright Writer_
