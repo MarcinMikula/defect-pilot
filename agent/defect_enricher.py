@@ -141,6 +141,22 @@ Fill every section — write "Unknown" if information is missing, never leave bl
 (single integer 0-100, where 100 = perfectly reproducible without asking questions)
 """
 
+# ---------------------------------------------------------------------------
+# Heuristic scoring weights
+# Used as fallback when AI returns 0 (model too strict) or fails to parse score.
+# Each field contributes points toward a max of 100.
+# ---------------------------------------------------------------------------
+
+_SCORE_WEIGHTS = {
+    "steps_to_reproduce": 25,   # Most important — without steps can't reproduce
+    "url": 20,                  # URL = environment for web apps
+    "expected_result": 15,      # Needed to judge pass/fail
+    "actual_result": 15,        # What actually went wrong
+    "screenshots_analyzed": 10, # Visual evidence
+    "ui_elements": 10,          # Selector/element info for automation
+    "requirement_refs": 5,      # Nice to have — traceability
+}
+
 
 # ---------------------------------------------------------------------------
 # Enricher
@@ -303,6 +319,31 @@ class DefectEnricher:
             screenshot_note=screenshot_note,
         )
 
+    def _heuristic_score(self, enriched: "EnrichedDefect") -> int:
+        """
+        Calculate completeness score based on which fields were extracted.
+        Used as fallback when AI returns 0 (model too strict) or score parsing fails.
+
+        Weights defined in _SCORE_WEIGHTS — sum to 100.
+        Returns int 0-100.
+        """
+        score = 0
+        if enriched.steps_to_reproduce:
+            score += _SCORE_WEIGHTS["steps_to_reproduce"]
+        if enriched.url and enriched.url.lower() not in ("unknown", "nie podano"):
+            score += _SCORE_WEIGHTS["url"]
+        if enriched.expected_result and enriched.expected_result.lower() != "unknown":
+            score += _SCORE_WEIGHTS["expected_result"]
+        if enriched.actual_result and enriched.actual_result.lower() != "unknown":
+            score += _SCORE_WEIGHTS["actual_result"]
+        if enriched.screenshots_analyzed > 0:
+            score += _SCORE_WEIGHTS["screenshots_analyzed"]
+        if enriched.ui_elements:
+            score += _SCORE_WEIGHTS["ui_elements"]
+        if enriched.requirement_refs:
+            score += _SCORE_WEIGHTS["requirement_refs"]
+        return min(score, 100)
+
     def _parse_response(
         self, defect: JiraDefect, raw: str, screenshots_analyzed: int
     ) -> EnrichedDefect:
@@ -319,29 +360,15 @@ class DefectEnricher:
         result.steps_to_reproduce = self._extract_list(raw, [
             "KROKI REPRODUKCJI", "STEPS TO REPRODUCE"
         ])
-        result.expected_result = self._extract_value(raw, [
-            "EXPECTED RESULT"
-        ])
-        result.actual_result = self._extract_value(raw, [
-            "ACTUAL RESULT"
-        ])
+        result.expected_result = self._extract_value(raw, ["EXPECTED RESULT"])
+        result.actual_result = self._extract_value(raw, ["ACTUAL RESULT"])
         result.url = self._extract_value(raw, ["URL"])
-        result.ui_elements = self._extract_list(raw, [
-            "ELEMENTY UI", "UI ELEMENTS"
-        ])
-        result.error_message = self._extract_value(raw, [
-            "KOMUNIKAT BŁĘDU", "ERROR MESSAGE"
-        ])
-        result.requirement_refs = self._extract_list(raw, [
-            "POWIĄZANE WYMAGANIA", "REQUIREMENT REFS"
-        ])
-        result.missing_info = self._extract_list(raw, [
-            "BRAKUJĄCE INFORMACJE", "MISSING INFO"
-        ])
+        result.ui_elements = self._extract_list(raw, ["ELEMENTY UI", "UI ELEMENTS"])
+        result.error_message = self._extract_value(raw, ["KOMUNIKAT BŁĘDU", "ERROR MESSAGE"])
+        result.requirement_refs = self._extract_list(raw, ["POWIĄZANE WYMAGANIA", "REQUIREMENT REFS"])
+        result.missing_info = self._extract_list(raw, ["BRAKUJĄCE INFORMACJE", "MISSING INFO"])
 
-        score_raw = self._extract_value(raw, [
-            "KOMPLETNOŚĆ", "COMPLETENESS SCORE"
-        ])
+        score_raw = self._extract_value(raw, ["KOMPLETNOŚĆ", "COMPLETENESS SCORE"])
 
         # Fallback: if section parser missed the score, scan raw response directly
         # Handles formats: "50", "KOMPLETNOŚĆ / COMPLETENESS SCORE\n50", "Score: 75/100"
@@ -356,6 +383,18 @@ class DefectEnricher:
             result.completeness_score = max(0, min(100, score))  # clamp 0-100
         except (ValueError, TypeError, AttributeError):
             result.completeness_score = 0
+
+        # Heuristic fallback — if AI returned 0, calculate from extracted fields.
+        # Prevents model strictness (penalizing missing OS/browser) from masking
+        # reports that are actually well-formed and reproducible.
+        # A true zero (empty report) will also score 0 here — no false positives.
+        if result.completeness_score == 0:
+            result.completeness_score = self._heuristic_score(result)
+            if result.completeness_score > 0:
+                logger.debug(
+                    f"[DefectEnricher] AI score was 0 — heuristic fallback: "
+                    f"{result.completeness_score}/100"
+                )
 
         return result
 
