@@ -28,8 +28,8 @@ class AIConfig:
     anthropic_model: str
     ollama_base_url: str
     ollama_model: str
-    gemini_api_key: str | None
-    gemini_model: str
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.0-flash"
 
 
 @dataclass
