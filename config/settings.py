@@ -28,6 +28,8 @@ class AIConfig:
     anthropic_model: str
     ollama_base_url: str
     ollama_model: str
+    gemini_api_key: str | None
+    gemini_model: str
 
 
 @dataclass
@@ -58,6 +60,8 @@ def load_config() -> AppConfig:
         anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         ollama_model=os.getenv("OLLAMA_MODEL", "llama3"),
+        gemini_api_key=os.getenv("GEMINI_API_KEY"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
     )
 
     if ai_provider == "anthropic" and not ai_config.anthropic_api_key:
