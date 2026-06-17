@@ -22,7 +22,7 @@
 - _Constraint acknowledged:_ Shadow DOM in Salesforce (LWC components) is genuinely hard. Setting the bar high on purpose — good portfolio signal.
 
 **Decision: Start with frontend defects only (v1)**
-- _Why:_ API/microservice retest is a different problem domain. Better to do one thing well.
+- _Why:_ API/microservice retest is a different problem domain. Better to do one thing well.  
 - _Future:_ Separate project or v2 module for API-level retests.
 
 ---
@@ -122,7 +122,7 @@ Map your custom fields before configuring. A `field_mapping.yml` config is plann
 **Context:** In enterprise environments, deployment windows are fixed (e.g. Mon–Fri 13:00–14:00).
 After a deployment window closes, a tester needs to check if any defects moved to "Ready for retest" status — currently done manually by checking email or Jira.
 
-**Proposed feature (Sprint 4):**
+**Proposed feature (Sprint 4 or 5):**
 - Configurable scheduler: set time + days in `.env` or `config.yml`
 - Agent polls Jira after deployment window: finds issues with status "Ready for retest" / "Do retestu" (configurable — locale variance again!)
 - Triggers retest script generation automatically
@@ -132,11 +132,14 @@ After a deployment window closes, a tester needs to check if any defects moved t
 ```yaml
 retest_scheduler:
   enabled: true
-  check_after: "14:00"
+  check_after: "14:00"          # poll after deployment window closes
   days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
-  retest_status: "Ready for retest"
+  retest_status: "Ready for retest"   # configurable — locale-dependent!
   timezone: "Europe/Warsaw"
 ```
+
+**Implementation note:** `APScheduler` or simple `schedule` library + cron-style config.
+Status name must be configurable — "Ready for retest", "Do retestu", "Gotowe do retestu" are all the same thing on different projects.
 
 ---
 
@@ -191,10 +194,13 @@ retest_scheduler:
 
 | Provider | Why interesting |
 |----------|----------------|
-| `gemini` | Free tier, good code generation, 1M context window |
+| `gemini` | 1M token context window, native vision, cheaper than Anthropic, free tier in Google AI Studio |
 | `openai` | GPT-4o vision, widely adopted in enterprise |
 
 Both = single new file + one line in `provider_factory.py`. Architecture already supports it.
+
+**Provider comparison table** (planned for Sprint 5 README):
+quality vs cost vs privacy vs vision support vs speed
 
 ---
 
@@ -216,8 +222,8 @@ This would have made defect-pilot a genuinely powerful but also genuinely unfini
 **defect-pilot v1 does exactly four things:**
 1. Reads Jira defect (done ✅)
 2. AI enriches it with technical context (done ✅)
-3. Generates a Playwright retest script (done ✅)
-4. Updates Jira with enriched data + acts as gatekeeper (Sprint 4)
+3. Generates a simple flat Playwright retest script (done ✅)
+4. Updates Jira with enriched data + script (Sprint 4)
 
 No POM. No flow library. No self-healing. No framework.
 A flat script that reproduces the bug is already 10x better than nothing.
@@ -240,64 +246,83 @@ Especially for a portfolio. Especially for a solo developer + Claude. 😄
 
 **Salesforce ADF injects `<span>` tags into Jira fields**
 - Salesforce embeds Aura component markup directly into Jira text fields — even the `summary` (title).
-- Example: `<span data-aura-rendered-by="12539:0" class="uiOutputText">Mark Status as Complete</span>`
-- Fix: `strip_html()` in `jira_reader.py` — strips tags, keeps inner text.
+- Example: `<span data-aura-rendered-by="12539:0" class="uiOutputText" data-aura-class="uiOutputText">Mark Status as Complete</span>`
+- This happens because Salesforce's Aura framework intercepts copy-paste and injects its own rendering markup.
+- Fix: `strip_html()` in `jira_reader.py` using `BeautifulSoup` — strips tags, keeps inner text.
 - Commit: `fix: strip HTML tags from Jira fields (Salesforce ADF span injection)`
 
 **⚠️ HTML strip also strips URLs — data loss**
-- `<a href="https://...">` links stripped along with `<span>` tags.
-- Fix: extract `href` before stripping. ADF inlineCard nodes also carry URLs.
-- `_adf_to_text()` extended with `_urls` collector — handles both link marks and `inlineCard` nodes.
+- `<a href="https://...">` links in the description are stripped along with `<span>` tags.
+- URL of the affected page (critical for retest!) is silently lost.
+- Fix: extract `href` attributes from `<a>` tags **before** stripping.
+- Pattern: `[a["href"] for a in soup.find_all("a", href=True)]`
+- Store as `urls` list in enriched issue dict — pass to AI prompt explicitly.
 
 **RSS export ≠ REST API v3 — again**
-- RSS shows HTML with `<a href>` visible. REST API v3 returns ADF JSON.
-- Always test against REST API, not RSS export.
+- RSS shows HTML-formatted description with `<a href>` visible.
+- REST API v3 returns ADF JSON — URLs live in `{"type": "text", "marks": [{"type": "link", "attrs": {"href": "..."}}]}` nodes.
+- `_adf_to_text()` must also extract link `href` from mark nodes, not just text content.
 
 ---
 
-### 🔗 Issue links — fetch linked requirements
+### 🔗 Issue links — not parsed (bug found in field testing)
 
-- STWA-9 linked to STWA-10 (Epic with functional requirement).
-- `get_linked_issues()` added to `JiraReader` — fetches full content of linked issues.
-- Requirement text passed to AI prompt as `requirement_context` → richer enrichment.
+**`links: 0` reported despite real issue link in Jira**
+- STWA-9 has a "Blocks" relationship with STWA-10 (the requirement Epic).
+- REST API v3 returns `issuelinks` array — but parser returned `links: 0`.
+- Root cause: `issuelinks` field needs to be explicitly requested in `fields=` param **and** parsed separately from `outwardIssue` / `inwardIssue` keys.
+- Fix: implemented in `jira_reader.py` — now fetches full linked issue content as requirement context.
+
+**Linked issue = requirement — huge enrichment value**
+- STWA-10 (Epic, "Blocks" STWA-9) contains the functional requirement:
+  *"uprawniony użytkownik ma mieć możliwość utworzenia, zapisania i zmiany statusów Leada"*
+- Enricher fetches linked issues and passes requirement text to AI prompt → much richer context.
 
 ---
 
 ### 💬 Selector in comment — gold for Playwright Writer
 
-- STWA-9 comment contained Salesforce LWC CSS selector — impossible to derive from screenshot alone.
-- Comments included in AI prompt → selectors flow through to `ui_elements` → Playwright `locator()`.
+**Tester left CSS selector in a comment**
+- STWA-9, comment: `#\31 2497\:0 > div > div.slds-grid.slds-path__action... > button > span`
+- This is a Salesforce LWC dynamically-generated selector — would be nearly impossible to derive from screenshot alone.
+- Comments included in AI prompt → selectors mentioned in comments → `ui_elements` in enriched output → Playwright `locator()` calls.
 
 ---
 
-### 🔢 Completeness score — parser bug + heuristic fallback
+### 🔢 Completeness score parser bug
 
-- Parser bug: `10/100` parsed as `101/100` — fixed with `re.search(r'\d{1,3}', score_raw)` + clamp `0–100`.
-- llava inconsistency: scores 0/10/50/100 on similar reports — heuristic fallback when AI returns `< 30`.
-- Heuristic weights: steps(25) + url(20) + expected(15) + actual(15) + screenshot(10) + ui_elements(10) + refs(5).
+**Score `10/100` parsed as `101/100`**
+- AI responded with `KOMPLETNOŚĆ: 10 / 100 (...)` — parser extracted `101` instead of `10`.
+- Fix: explicit regex `(\d{1,3})\s*/\s*100`, clamp `0–100`, heuristic fallback when AI returns `< 30`.
 
 ---
 
 ### 🔒 SSL / certifi — Windows Microsoft Store Python
 
-- MS Store Python doesn't inherit Windows certificate trust chain.
-- Fix: `pip install pip-system-certs` — zero code changes.
-- Lesson: if it worked before and broke now → suspect certifi bundle rotation or Windows Update.
+**Python from Microsoft Store doesn't inherit Windows certificate trust chain**
+- `curl` (PowerShell) connected fine — Windows trusted the Atlassian cert.
+- Python `requests` failed with `CERTIFICATE_VERIFY_FAILED` — MS Store Python uses isolated certstore.
+- Fix: `pip install pip-system-certs` — bridges Windows CertStore into Python's SSL context, zero code changes.
+- **Lesson:** If it worked before and broke now → suspect certifi bundle rotation or Windows Update touching cert chain.
 
 ---
 
-### 📋 Completeness checklist
+### 📋 Completeness checklist — proposed standard (Sprint 3 input)
 
-| Field | Status after Sprint 2 fixes |
-|-------|----------------------------|
-| Steps to reproduce | ✅ AI extracts |
-| Expected / actual result | ✅ AI extracts |
-| URL / navigation path | ✅ ADF inlineCard + link marks |
-| Error message | ✅ AI from screenshot/description |
-| Screenshot | ✅ downloaded + sent to vision model |
-| Requirement reference | ✅ linked issue fetched |
-| CSS/UI selector | ✅ from comments via AI prompt |
-| Environment | ⚠️ defaults assumed (Chrome/Windows) |
+Based on field testing with STWA-9, a defect report is "complete" when it contains:
+
+| Field | Source | Status in STWA-9 |
+|-------|--------|-----------------|
+| Steps to reproduce | description / AI | ✅ extracted by AI |
+| Expected result | description / AI | ✅ extracted |
+| Actual result | description / AI | ✅ extracted |
+| URL / navigation path | description `<a href>` / ADF inlineCard | ✅ fixed |
+| Error message | description / screenshot | ✅ AI correctly said "not visible" |
+| Screenshot | attachment | ✅ present |
+| Requirement reference | title / linked issue | ✅ STWA-10 fetched |
+| CSS/UI selector | comment | ✅ passed to AI prompt |
+| Environment (browser, OS, role) | environment field / description | ⚠️ defaults assumed |
+| Assignee / reporter | Jira fields | ✅ |
 
 ---
 
@@ -305,140 +330,130 @@ Especially for a portfolio. Especially for a solo developer + Claude. 😄
 
 ### 🤖 llava limitations — documented from real testing
 
-**Tested on:** STWA-9, STWA-12, STWA-13
+**Tested on:** STWA-9 (Lead status bug), STWA-12 (UX/frontend bug), STWA-13 (Opportunity save error)
 
-**Hallucinations — most dangerous failure mode:**
-- Fabricates URLs: returned `https://example-frontend.com` for STWA-12 (no URL in report)
-- Invents element names: `OpportunityId`, `SaveButton` — plausible but unverified
-- Copies CSS selector into wrong sections (requirement refs, error message)
-- Mitigation: generated scripts mark AI-inferred selectors with `# TODO: verify`
+**llava hallucinations — the most dangerous failure mode:**
+- **Fabricates URLs** when none are present — returned `https://example-frontend.com` for STWA-12 which had no URL. A hallucinated URL in a retest script = script navigates to wrong place.
+- **Invents element names** — `OpportunityId`, `SaveButton` — plausible-sounding but not verified against actual DOM.
+- **Copies CSS selector into wrong sections** — when uncertain about requirement refs or error messages, pastes the CSS selector there instead.
+- **Mitigation:** Generated scripts mark AI-inferred selectors as `# TODO: verify selector`.
 
-**Inconsistency:**
-- Completeness score: 0, 10, 50, 100 across runs on similar reports
-- Mutates Polish headers: `BRAKUJĄCe`, `BRAKUJĄCią`, `KOMPLETNÓŚĆ` — parser misses them
-- Sometimes outputs `**HEADER:**` (bold + colon) — gap in `_is_section_header()`
+**llava inconsistency — scoring and formatting:**
+- Completeness score varies wildly (0, 10, 50, 100) across runs on similar-quality reports.
+- Mutates Polish section headers with random diacritics: `BRAKUJĄCe`, `BRAKUJĄCią`, `KOMPLETNÓŚĆ` — parser misses these sections silently.
+- Sometimes outputs `**HEADER:**` (bold + colon) — gap in `_is_section_header()`.
 
-**Strengths:**
+**llava strengths:**
 - Picks up URL from comments when missing from description ✅
-- Reads screenshot, identifies UI state ✅
+- Reads screenshot and identifies visible UI state ✅
 - Extracts error message from title when description is empty ✅
+- Correctly scores incomplete reports lower than complete ones (relative) ✅
 
 ---
 
-### 🛡️ Issue type guard
+### 🛡️ Issue type guard — implemented in Sprint 3
 
+- Nothing stops a tester from running defect-pilot on an Epic, Story, or Task.
+- Guard added in `run_retest.py` — checks `issue_type` against configurable list.
 - Configurable via `.env`: `SUPPORTED_ISSUE_TYPES=bug,błąd,defect,error,problem`
-- Implemented in `run_retest.py` — fails fast with clear message if wrong type
-- Never hardcoded — "Błąd" = "Bug" = "Defect" on different projects
+- Never hardcoded — locale variance ("Błąd" = "Bug" = "Defect" on different projects).
 
 ---
 
-### 🎬 Video attachments — parked
+### 🎬 Video attachments — parked for later
 
-- Testers sometimes record `.mp4`/`.mov` walkthroughs instead of writing steps
-- Current: silently skipped by `_is_image()`
-- Planned: explicit warning; future Sprint 5+: ffmpeg keyframe extraction
+- Manual testers sometimes record screen walkthroughs (`.mp4`, `.mov`) instead of writing steps.
+- Current: `_is_image()` filters by MIME type — videos silently skipped.
+- Planned: explicit warning when video detected.
+- Future (Sprint 5+): extract keyframes via `ffmpeg`, send as images to vision model.
 
 ---
 
 ### 🔗 URL in comments — works via AI, gap in parser
 
-- STWA-13: URL in comment → llava picked it up correctly
-- Gap: `jira_reader.py` doesn't extract URLs from comment ADF — future improvement
+- STWA-13: tester put Opportunity URL in a comment — llava picked it up correctly.
+- Gap: `jira_reader.py` only extracts URLs from description ADF, not comment bodies.
+- Future: apply same URL extraction to comment ADF.
 
 ---
 
-## Sprint 3 — Playwright Writer Option C (June 2026)
+## Sprint 3 — Playwright Writer (June 2026)
 
-### 🏗️ Architecture additions
-
-**`retest/shared/sf_login.py`** — Salesforce Lightning login:
-- Reads `SF_BASE_URL`, `SF_USERNAME`, `SF_PASSWORD` from `.env`
-- Handles login form + waits for Lightning to load
-- Raises `EnvironmentError` if credentials missing — fails fast
-
-**`retest/playwright_writer.py`** — deterministic generator:
-- `generate(enriched)` → Python script string
-- `save(enriched)` → writes to `retest/scripts/retest_{ISSUE_KEY}.py`
-- Heuristics: "navigate/go to" → skip (already in Navigate section), "click" → `get_by_role()`, "fill" → TODO
-- Shadow DOM detection: Aura IDs + SLDS classes → `pierce/` prefix
-- `_needs_fresh_data()`: CRUD keywords → COMPLEX warning in script
-- `_clean_url()`: strips llava markdown angle brackets `<https://...>` → `https://...`
-
-**`scripts/run_retest.py`** — CLI entry point:
-- `--issue`, `--url` override, `--debug`, `--dry-run`
-- Full pipeline: Jira fetch → issue type guard → enrichment → script generation
-
-### ⚠️ Salesforce + Playwright — IP whitelist
-
-- SF blocks logins from unrecognized IPs — sends email verification
-- Fix: `Setup → Network Access` → add dev machine IP
-- Dynamic IP problem: `Setup → Session Settings` → uncheck "Lock sessions to IP"
-
----
-
-## Sprint 3a — Script generation evaluation (June 2026)
-
-### 📋 Option C vs Option B — honest comparison
-
-**What Option C (deterministic template) produced for STWA-9:**
-
-```python
-def test_retest_stwa_9(page: Page) -> None:
-    login(page)
-    page.goto(RECORD_URL)
-    page.wait_for_load_state("networkidle")
-    page.get_by_role("button", name="Mark Status as Complete").click()  # TODO: verify
-    pass  # no assertion
-```
-
-**Assessment:** Not a working retest. It clicks the button and declares success regardless of what happens. A tester would need to manually add assertions, selectors, and wait conditions — work that could easily take longer than clicking through the app manually.
-
-**Option C is a documentation artifact, not an automat.**
-
----
-
-### 🔄 Decision: Option B with Gemini
+### 🎭 Option C — deterministic template (chosen for v1)
 
 **Three options evaluated:**
 
-| Option | Approach | Privacy | Quality | Decision |
-|--------|----------|---------|---------|----------|
-| A | Ollama generates Playwright code | ✅ Local | ❌ Poor — llava bad at code generation | Rejected |
-| C | Deterministic template | ✅ Local | ⚠️ Skeleton only — requires manual assertions | Fallback for air-gapped |
-| B | External LLM generates full script | ⚠️ Cloud | ✅ Complete working script with assertions | **Chosen** |
+| Option | Approach | Privacy | Quality | Chosen? |
+|--------|----------|---------|---------|---------|
+| A | Ollama generates Playwright code | ✅ Local | ⚠️ Poor — llava bad at code | No |
+| B | Claude/Anthropic generates code | ❌ Data leaves machine | ✅ Excellent | Future |
+| C | Deterministic template + EnrichedDefect data | ✅ Local | ✅ Predictable | **v1** |
 
-**Why Gemini for Option B:**
-- Free tier — no credit card, no cost for portfolio/demo use
-- Good code generation quality, especially Python
-- Separate from enrichment provider — data sent only once for script generation, not on every enrichment run
-- `gemini-2.0-flash` — fast, free, sufficient quality
+**Why Option C:**
+- No AI in script generation = no hallucinated Playwright calls
+- Every gap marked with `# TODO` — honest, auditable
+- Output quality bounded by enrichment quality — makes enrichment gaps visible
+- `# TODO: verify selector` in every AI-inferred selector — tester knows what to check
 
-**Two-stage data policy:**
-- Enrichment (ollama) → always local, data never leaves machine
-- Script generation (Gemini) → opt-in via `SCRIPT_GENERATION=cloud`, explicit CLI warning + confirmation
+**Option B planned for v2** — when we add explicit data-out consent flag to config.
 
-**What Option B will produce:**
-```python
-def test_retest_stwa_9(page: Page) -> None:
-    login(page)
-    page.goto(RECORD_URL)
-    page.wait_for_load_state("networkidle")
+---
 
-    button = page.get_by_role("button", name="Mark Status as Complete")
-    button.wait_for(state="visible", timeout=10_000)
+### 🏗️ Architecture additions — Sprint 3
 
-    # Bug: button should be enabled — assert FAILS when bug is present
-    expect(button).to_be_enabled()
-```
+**`retest/shared/sf_login.py`** — Salesforce Lightning login helper:
+- Reads `SF_BASE_URL`, `SF_USERNAME`, `SF_PASSWORD` from `.env`
+- Handles login form, waits for Lightning Experience to load
+- Raises `EnvironmentError` if credentials missing — fails fast, clear message
+- Imported by every generated retest script: `from retest.shared.sf_login import login`
 
-**Option C kept as `SCRIPT_GENERATION=local`** — valid choice for NDA/air-gapped environments where even script generation data cannot leave the machine. Documented limitation: requires manual assertion writing.
+**`retest/playwright_writer.py`** — deterministic script generator:
+- `generate(enriched)` → Python script string
+- `save(enriched)` → writes to `retest/scripts/retest_{ISSUE_KEY}.py`
+- Heuristic step mapping: "navigate/go to/open" → skip (handled in Navigate section), "click" → `get_by_role()`, "fill" → `page.fill()` TODO
+- Shadow DOM detection: Aura IDs (`#\31...`) and SLDS classes → `pierce/` prefix
+- `_needs_fresh_data()` heuristic: CRUD keywords in steps/summary → COMPLEX warning
+- `_clean_url()` — strips llava markdown angle brackets `<https://...>` → `https://...`
+
+**`scripts/run_retest.py`** — CLI entry point:
+- `--issue` required, `--url` override, `--debug`, `--dry-run`
+- Full pipeline: Jira fetch → issue type guard → enrichment → script generation
+- `--dry-run` prints to stdout without saving — safe for testing
+
+---
+
+### 🧪 Test Data Problem — core challenge for retest scripts
+
+**Problem:** Retest script with hardcoded Salesforce record URL (`/r/Lead/00Qd200000XByc9EAD/view`) fails if:
+- Record was closed, converted, or deleted since bug was filed
+- Environment was refreshed with new data
+
+**v1 solution:** `RECORD_URL` with `os.getenv("RETEST_URL", "<url_from_bug>")` — tester can override at runtime.
+
+**Two retest modes (Sprint 4 design):**
+
+| Mode | When | Action |
+|------|------|--------|
+| **Simple** | Navigation + click + check, no CRUD, existing data OK | Auto-retest via Playwright + screenshots + result in Jira |
+| **Complex** | CRUD involved, fresh data needed, multi-step setup | Comment to tester: "Prepare test data, provide URL" → retest on prepared data |
+
+**Heuristic for simple vs complex:** `_needs_fresh_data()` — CRUD keywords in steps/summary. To be refined in Sprint 4.
+
+---
+
+### ⚠️ Salesforce + Playwright — IP whitelist required
+
+- SF Developer Edition blocks logins from unrecognized IPs — sends email verification code.
+- Playwright cannot handle email verification flow.
+- Fix: `Setup → Network Access → New` — add dev machine IP.
+- Dynamic IP problem: home ISP changes IP periodically → re-add to whitelist or disable IP restriction for dev profile.
+- `Setup → Session Settings` → uncheck "Lock sessions to the IP address from which they originated" — prevents session reset on IP change.
 
 ---
 
 ## 🔄 Vision pivot — defect-pilot as QA gatekeeper (June 2026)
 
-### Original vision vs evolved vision
+### The original vision vs the evolved vision
 
 **Original:** "Lazy tester helper" — enriches incomplete bug reports so devs don't have to play detective.
 
@@ -447,47 +462,62 @@ def test_retest_stwa_9(page: Page) -> None:
 ### New end-to-end flow
 
 ```
-Tester zgłasza buga → alokuje na AI_agent w Jira
+Tester zgłasza buga w Jira
+        ↓
+Alokuje na "AI_agent" (dedykowany service account)
         ↓
 ⏰ Scheduler — poll co 5 min
    JQL: assignee = AI_agent AND status = "Do zrobienia" AND updated >= -10m
         ↓
-📥 JiraReader + 🤖 DefectEnricher
+📥 JiraReader — parsuje zgłoszenie
         ↓
-    Krytyczne braki?
-    (przez które ollama bredzi)
-         ↓ TAK                      ↓ NIE
-  📤 Komentarz z listą braków   📤 Enriched comment
-  realokacja do testera          realokacja do deva
+🤖 DefectEnricher — sprawdza kompletność vs checklist
         ↓
-  Tester uzupełnia, alokuje znowu
+    ┌─────────────────────────────────────────┐
+    │ Krytyczne braki?                        │
+    │ (przez które ollama bredzi)             │
+    │ - brak URL                              │
+    │ - brak opisu co się dzieje              │
+    │ - brak screenshota (UI bug)             │
+    └─────────────────────────────────────────┘
+         ↓ TAK                    ↓ NIE
+  📤 Komentarz z listą       📤 Enriched comment
+  braków do testera          realokacja do deva
+  realokacja do zgłaszającego
+        ↓
+  Tester uzupełnia i alokuje znowu na AI_agent
         ↓
 ⏰ Scheduler — po okienku wdrożeniowym
-   Bug zmienił właściciela z opisem "fixed"?
+   Defekt zmienił właściciela z opisem "fixed"?
         ↓
-    Prosty case?
-    (nawigacja + klik, brak CRUD, dane OK)
-         ↓ TAK                      ↓ NIE (złożony)
-  🎭 Auto-retest               💬 "Przygotuj dane
-  + screenshoty                do retestu, podaj URL"
-  + wynik w Jira                      ↓
-                               Tester przygotowuje
-                                      ↓
-                               🎭 Playwright na gotowcu
-                               + screenshoty + wynik
+    ┌─────────────────────────────┐
+    │ Prosty case?                │
+    │ - nawigacja + klik + check  │
+    │ - brak CRUD                 │
+    │ - dane z bug reportu OK     │
+    └─────────────────────────────┘
+         ↓ TAK                    ↓ NIE (złożony)
+  🎭 Auto-retest             💬 Komentarz do testera:
+  Playwright + screenshoty   "Przygotuj dane do retestu
+  wynik w Jira               i podaj URL w komentarzu"
+                                    ↓
+                             Tester przygotowuje dane
+                                    ↓
+                             🎭 Playwright na gotowcu
+                             + screenshoty + wynik w Jira
 ```
 
 ### Why this matters
 
-- **Tester** — dostaje konkretną listę braków zamiast odrzuconego ticketa
-- **Dev** — dostaje tylko kompletne zgłoszenia
-- **QA Lead** — widzi metryki: % zwróconych zgłoszeń, % auto-retestów
+- **Tester** — dostaje konkretną listę braków zamiast odrzuconego ticketa bez wyjaśnienia
+- **Dev** — dostaje tylko kompletne zgłoszenia, zero "co to znaczy?"
+- **QA Lead** — widzi metryki: % zwróconych zgłoszeń, średni czas enrichmentu, % auto-retestów
 - **Projekt** — krótszy cykl bug → fix → retest → zamknięty
 
 ### AI_agent in Jira
 
-- Dedykowany service account — tester alokuje buga zamiast na deva
-- Scheduler: JQL `assignee = AI_agent AND status = "Do zrobienia" AND updated >= -10m`
+- Dedykowany service account w Jira — tester alokuje buga zamiast na deva
+- Scheduler odpytuje JQL: `assignee = AI_agent AND status = "Do zrobienia" AND updated >= -10m`
 - Poll co 5 min — wystarczający dla procesu QA, nie przeciąża Jira API
 - `APScheduler` lub prosty `schedule` library
 
@@ -495,27 +525,63 @@ Tester zgłasza buga → alokuje na AI_agent w Jira
 
 | Krytyczne — zwrot do testera | Ostrzeżenie — enrichujemy mimo to |
 |------------------------------|----------------------------------|
-| Brak URL | Brak wymagania |
+| Brak URL / środowiska | Brak wymagania |
 | Brak opisu co się dzieje | Brak selektora |
 | Brak screenshota (UI bug) | Niejasne kroki |
 | Opis = sam tytuł przepisany | Brak expected result |
 
-**Definicja robocza:** "braki przez które ollama bredzi" — zweryfikowane na STWA-12 (halucynowany URL) i STWA-13 (actual = tytuł).
-
-### Test Data Problem — simple vs complex retest
-
-**Simple retest** (auto):
-- Nawigacja + klik + check
-- Brak operacji CRUD
-- Dane z bug reportu nadal aktualne
-
-**Complex retest** (semi-auto):
-- Wymaga świeżych danych (Lead, Opportunity, Account)
-- Rekord z bug reportu może być zamknięty/usunięty
-- Tester przygotowuje dane → podaje URL → Playwright wykonuje retest
-
-Heurystyka w `_needs_fresh_data()`: CRUD keywords (create, save, add, delete, convert, lead, opportunity...) w steps/summary → COMPLEX.
+**Definicja robocza krytycznych braków:** "braki przez które ollama bredzi" — zweryfikowane na STWA-12 (halucynowany URL) i STWA-13 (actual result = tytuł).
 
 ---
 
-_Next update: after Sprint 4 — Jira Updater + Gatekeeper + Scheduler_
+_Next update: after Sprint 4 — Jira Updater + Scheduler + Gatekeeper logic_
+
+---
+
+### 📋 Option C — honest assessment after first real script
+
+**What we got:** `retest_STWA_9.py` — login + navigation + one `get_by_role().click()` + `pass`.
+
+**What we didn't get:** assertions, wait strategies, error handling, anything that makes it a real retest.
+
+**Root cause:** Option C (deterministic template) can map steps to Playwright calls heuristically, but cannot generate meaningful assertions without knowing *what to check after the action* — and that requires understanding the expected UI state in a way that needs structured `assertion_target` data, not free-text `expected_result`.
+
+**Practical consequence:** A tester would need to manually add assertions, selectors, and wait conditions before the script is runnable. For a simple 3-step retest, this manual work could easily take longer than just clicking through the app manually. **Option C produces a documentation artifact, not a working automat.**
+
+**Decision: move to Option B (Claude generates full script)**
+- Option C → parked as fallback for air-gapped / strict NDA environments
+- Option B → default when `SCRIPT_GENERATION=cloud` in `.env`
+- Explicit consent required — CLI warning before sending data to Anthropic API
+- Config: `SCRIPT_GENERATION=local|cloud` — tester/admin chooses consciously
+
+**What Option B will give us that Option C cannot:**
+- Meaningful assertions based on expected result context
+- Proper `expect()` calls with correct locators
+- `wait_for_selector` / `wait_for_load_state` in right places
+- Overall: a script that actually retests the bug, not just clicks in its direction
+
+---
+
+_Next update: after Sprint 4 — Option B script generation + Jira Updater + Scheduler_
+
+---
+
+### ⚠️ Gemini free tier — blocked despite correct setup (June 2026)
+
+**Problem:** `GeminiProvider` integration was technically correct — connection succeeded, model initialized, request sent — but every call returned `429 RESOURCE_EXHAUSTED` with `limit: 0` for all quota metrics (requests/day, requests/minute, input tokens/minute), across multiple models (`gemini-2.0-flash`, `gemini-2.0-flash-lite`, `gemini-1.5-flash`).
+
+**Troubleshooting steps taken (all failed to resolve):**
+1. Tried multiple Gemini models — same `limit: 0` on all
+2. Enabled Generative Language API explicitly in Google Cloud Console
+3. Created a brand new Google Cloud project with a fresh API key — same result
+4. Verified Poland is on the [supported regions list](https://ai.google.dev/gemini-api/docs/available-regions) — confirmed
+5. Attached a billing account (credit card) to the project — still `limit: 0`
+
+**Conclusion:** This appears to be an account-level restriction on Google's side, not a configuration issue on ours. Possibly: new-account cooldown period, undisclosed regional throttling, or a flag specific to this Google account that isn't documented. The `google-genai` SDK and our `GeminiProvider` implementation work correctly — verified by clean request/response cycle, just blocked by quota enforcement before any content is returned.
+
+**Decision: pivot Option B to OpenAI (`gpt-4o-mini`)**
+- Stable, well-documented quota system
+- Very low cost (~$0.15/1M input tokens) — a few cents covers hundreds of script generations
+- No free-tier ambiguity — pay-as-you-go from a small prepaid credit
+
+**Lesson for future provider integration:** Don't assume "free tier" literally means zero friction. Budget troubleshooting time for account-level quirks that have nothing to do with code correctness. If 3+ independent fixes (new project, new key, billing) don't resolve a `limit: 0`, stop debugging and switch providers — the issue is likely outside your control.
