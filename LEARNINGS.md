@@ -462,75 +462,74 @@ Based on field testing with STWA-9, a defect report is "complete" when it contai
 ### New end-to-end flow
 
 ```
-Tester zgłasza buga w Jira
+Tester files a bug in Jira
         ↓
-Alokuje na "AI_agent" (dedykowany service account)
+Assigns it to "AI_agent" (dedicated service account)
         ↓
-⏰ Scheduler — poll co 5 min
-   JQL: assignee = AI_agent AND status = "Do zrobienia" AND updated >= -10m
+⏰ Scheduler — polls every 5 min
+   JQL: assignee = AI_agent AND status = "To Do" AND updated >= -10m
         ↓
-📥 JiraReader — parsuje zgłoszenie
+📥 JiraReader — parses the report
         ↓
-🤖 DefectEnricher — sprawdza kompletność vs checklist
+🤖 DefectEnricher — checks completeness against the checklist
         ↓
     ┌─────────────────────────────────────────┐
-    │ Krytyczne braki?                        │
-    │ (przez które ollama bredzi)             │
-    │ - brak URL                              │
-    │ - brak opisu co się dzieje              │
-    │ - brak screenshota (UI bug)             │
+    │ Critical gaps?                          │
+    │ (the kind that make ollama hallucinate) │
+    │ - missing URL                           │
+    │ - no description of what's happening    │
+    │ - no screenshot (UI bug)                │
     └─────────────────────────────────────────┘
-         ↓ TAK                    ↓ NIE
-  📤 Komentarz z listą       📤 Enriched comment
-  braków do testera          realokacja do deva
-  realokacja do zgłaszającego
+         ↓ YES                     ↓ NO
+  📤 Comment with gap list   📤 Enriched comment
+  reassign back to tester    reassign to developer
         ↓
-  Tester uzupełnia i alokuje znowu na AI_agent
+  Tester fills gaps, reassigns to AI_agent again
         ↓
-⏰ Scheduler — po okienku wdrożeniowym
-   Defekt zmienił właściciela z opisem "fixed"?
+⏰ Scheduler — after deployment window closes
+   Bug reassigned with a "fixed" note?
         ↓
     ┌─────────────────────────────┐
-    │ Prosty case?                │
-    │ - nawigacja + klik + check  │
-    │ - brak CRUD                 │
-    │ - dane z bug reportu OK     │
+    │ Simple case?                │
+    │ - navigation + click + check│
+    │ - no CRUD involved          │
+    │ - bug report data still OK  │
     └─────────────────────────────┘
-         ↓ TAK                    ↓ NIE (złożony)
-  🎭 Auto-retest             💬 Komentarz do testera:
-  Playwright + screenshoty   "Przygotuj dane do retestu
-  wynik w Jira               i podaj URL w komentarzu"
+         ↓ YES                    ↓ NO (complex)
+  🎭 Auto-retest             💬 Comment to tester:
+  Playwright + screenshots   "Prepare test data,
+  result posted to Jira      provide URL in a comment"
                                     ↓
-                             Tester przygotowuje dane
+                             Tester prepares data
                                     ↓
-                             🎭 Playwright na gotowcu
-                             + screenshoty + wynik w Jira
+                             🎭 Playwright on prepared data
+                             + screenshots + result in Jira
 ```
 
 ### Why this matters
 
-- **Tester** — dostaje konkretną listę braków zamiast odrzuconego ticketa bez wyjaśnienia
-- **Dev** — dostaje tylko kompletne zgłoszenia, zero "co to znaczy?"
-- **QA Lead** — widzi metryki: % zwróconych zgłoszeń, średni czas enrichmentu, % auto-retestów
-- **Projekt** — krótszy cykl bug → fix → retest → zamknięty
+- **Tester** — gets a concrete list of gaps instead of a rejected ticket with no explanation
+- **Dev** — only receives complete reports, zero "what does this mean?"
+- **QA Lead** — gets visibility: % of reports returned, average enrichment time, % of auto-retests
+- **Project** — shorter bug → fix → retest → closed cycle
 
 ### AI_agent in Jira
 
-- Dedykowany service account w Jira — tester alokuje buga zamiast na deva
-- Scheduler odpytuje JQL: `assignee = AI_agent AND status = "Do zrobienia" AND updated >= -10m`
-- Poll co 5 min — wystarczający dla procesu QA, nie przeciąża Jira API
-- `APScheduler` lub prosty `schedule` library
+- Dedicated service account in Jira — tester assigns the bug here instead of to a developer
+- Scheduler polls JQL: `assignee = AI_agent AND status = "To Do" AND updated >= -10m`
+- Poll every 5 min — sufficient for a QA process, doesn't overload Jira's API
+- `APScheduler` or the simple `schedule` library
 
-### Krytyczne braki vs ostrzeżenia
+### Critical gaps vs warnings
 
-| Krytyczne — zwrot do testera | Ostrzeżenie — enrichujemy mimo to |
+| Critical — return to tester | Warning — enrich anyway |
 |------------------------------|----------------------------------|
-| Brak URL / środowiska | Brak wymagania |
-| Brak opisu co się dzieje | Brak selektora |
-| Brak screenshota (UI bug) | Niejasne kroki |
-| Opis = sam tytuł przepisany | Brak expected result |
+| Missing URL / environment | Missing requirement |
+| No description of what happens | Missing selector |
+| No screenshot (UI bug) | Unclear steps |
+| Description is just the title repeated | Missing expected result |
 
-**Definicja robocza krytycznych braków:** "braki przez które ollama bredzi" — zweryfikowane na STWA-12 (halucynowany URL) i STWA-13 (actual result = tytuł).
+**Working definition of "critical":** the kind of gap that makes ollama hallucinate — confirmed on STWA-12 (fabricated URL) and STWA-13 (actual result = the title).
 
 ---
 
@@ -566,22 +565,22 @@ _Next update: after Sprint 4 — Option B script generation + Jira Updater + Sch
 
 ---
 
-### ⚠️ Gemini free tier — blocked despite correct setup (June 2026)
+### ⚠️ Gemini API — opaque free-tier billing, switched to OpenAI (June 2026)
 
-**Problem:** `GeminiProvider` integration was technically correct — connection succeeded, model initialized, request sent — but every call returned `429 RESOURCE_EXHAUSTED` with `limit: 0` for all quota metrics (requests/day, requests/minute, input tokens/minute), across multiple models (`gemini-2.0-flash`, `gemini-2.0-flash-lite`, `gemini-1.5-flash`).
+**Symptom:** `GeminiProvider` integration worked correctly end-to-end — connection succeeded, model initialized, request sent, clean request/response cycle. But every call returned `429 RESOURCE_EXHAUSTED` with `limit: 0` across multiple models (`gemini-2.0-flash`, `gemini-2.0-flash-lite`, `gemini-1.5-flash`).
 
-**Troubleshooting steps taken (all failed to resolve):**
-1. Tried multiple Gemini models — same `limit: 0` on all
-2. Enabled Generative Language API explicitly in Google Cloud Console
-3. Created a brand new Google Cloud project with a fresh API key — same result
-4. Verified Poland is on the [supported regions list](https://ai.google.dev/gemini-api/docs/available-regions) — confirmed
-5. Attached a billing account (credit card) to the project — still `limit: 0`
+**What we tried:**
+1. Multiple Gemini models — same `limit: 0` on all
+2. Explicitly enabled Generative Language API in Google Cloud Console
+3. Fresh Google Cloud project + new API key — same result
+4. Confirmed Poland is on the supported regions list
+5. Attached a billing account (credit card) — still `limit: 0`, until a later attempt finally surfaced the real message: *"Your prepayment credits are depleted."*
 
-**Conclusion:** This appears to be an account-level restriction on Google's side, not a configuration issue on ours. Possibly: new-account cooldown period, undisclosed regional throttling, or a flag specific to this Google account that isn't documented. The `google-genai` SDK and our `GeminiProvider` implementation work correctly — verified by clean request/response cycle, just blocked by quota enforcement before any content is returned.
+**Root cause:** Gemini's "free tier" turned out to require prepaid credits behind the scenes, and the error messaging didn't say so until billing was attached — every earlier attempt returned a generic `limit: 0` that looked like a config or region problem but was actually a billing-state problem. Several documented troubleshooting paths (new project, new key, region check) are reasonable first steps and would resolve a *different* class of issue — they just weren't the cause here.
 
-**Decision: pivot Option B to OpenAI (`gpt-4o-mini`)**
-- Stable, well-documented quota system
+**Decision: use OpenAI (`gpt-4o-mini`) for Option B instead**
+- Transparent, well-documented pay-as-you-go billing — no ambiguous "free tier" state
 - Very low cost (~$0.15/1M input tokens) — a few cents covers hundreds of script generations
-- No free-tier ambiguity — pay-as-you-go from a small prepaid credit
+- Up and running within minutes of switching
 
-**Lesson for future provider integration:** Don't assume "free tier" literally means zero friction. Budget troubleshooting time for account-level quirks that have nothing to do with code correctness. If 3+ independent fixes (new project, new key, billing) don't resolve a `limit: 0`, stop debugging and switch providers — the issue is likely outside your control.
+**Lesson for future provider integration:** "Free tier" error messages can be misleading — `limit: 0` may mean "no quota assigned" or "billing not satisfied," and the API may not say which until later in the troubleshooting process. Worth checking provider billing status early, and setting a time-box for infrastructure debugging before switching providers.
