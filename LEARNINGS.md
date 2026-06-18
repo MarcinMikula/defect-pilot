@@ -584,3 +584,71 @@ _Next update: after Sprint 4 — Option B script generation + Jira Updater + Sch
 - Up and running within minutes of switching
 
 **Lesson for future provider integration:** "Free tier" error messages can be misleading — `limit: 0` may mean "no quota assigned" or "billing not satisfied," and the API may not say which until later in the troubleshooting process. Worth checking provider billing status early, and setting a time-box for infrastructure debugging before switching providers.
+
+
+---
+
+## Sprint 3a — addendum: positioning the retest module honestly (June 2026)
+
+### 🤔 Reality check on retest ROI
+
+After getting Option B working, a harder question surfaced: for a *simple* retest case, is running defect-pilot's Playwright pipeline actually faster than a tester just clicking through the app manually?
+
+**Honest answer: no, not for simple cases.**
+
+- Tester manually retesting a simple fix: click, click, verify — seconds to ~1 minute.
+- defect-pilot pipeline: enrichment via ollama (2-3 min) + script generation via OpenAI (seconds) + Playwright execution + review — several minutes.
+
+For complex cases requiring fresh test data (new Lead, new Opportunity), the gap is even wider — preparing the data by hand is faster than describing it to a tool that then has to operate the same UI anyway.
+
+**What the retest module *does* deliver:** automatic documentation (screenshots, structured pass/fail), consistency, and a working demonstration that AI-assisted retest automation is technically achievable end-to-end. What it does *not* deliver, for this v1 scope: a speed or cost advantage over a human tester for simple cases.
+
+### 📐 Where retest automation actually pays off
+
+Real ROI for automated retest comes from:
+- **Regression suites** — same test, run hundreds of times across releases. One-off retest of a single reported bug doesn't amortize the setup cost; a regression suite does.
+- **Self-healing POM/SOM frameworks** — when selectors break (Salesforce LWC IDs change between releases), a self-healing framework adapts; a flat generated script needs regeneration.
+- **Composability** — defect-pilot's enrichment output (steps, URL, selectors, expected/actual) is exactly the structured input a POM-based framework needs to *generate* a permanent regression test, not just a throwaway retest script.
+
+**This reframes defect-pilot's retest module honestly: it's a proof-of-concept for "AI can read a bug report and drive a browser," not a production retest solution.** The production answer is composition with the author's other projects:
+- `qa-automation-framework` — POM/SOM patterns for Salesforce and general web apps
+- `PhoenixQA` — self-healing selector framework (planned)
+
+Combined, enrichment + gatekeeper (defect-pilot) + POM/self-healing (qa-automation-framework + PhoenixQA) cover both the "is this bug report good enough to act on" problem and the "how do we keep automated tests working as the UI changes" problem — two real, separate problems, each solved by the right tool.
+
+### ✅ Decision: keep the full retest pipeline, label it honestly
+
+Rather than cut the retest module, we keep it — it demonstrates real technical capability (Jira → AI enrichment → AI code generation → Playwright execution → documented result) end-to-end, which has standalone portfolio value. The README will say plainly: this retest module is a working proof-of-concept; production-grade retest and regression belongs in a POM/self-healing framework, where this project's structured enrichment output becomes the input.
+
+---
+
+## Sprint 4 (planned) — full demo scenario specification
+
+### 🎬 End-to-end demo: "Add Products to Opportunity"
+
+A complete walkthrough exercising every part of the gatekeeper + scheduler + retest pipeline, built around one fake business requirement and one fake bug, to be used as the README's "see it in action" narrative and as the Sprint 4/5 build target.
+
+**Fake requirement:** user can add products with a quantity to an Opportunity.
+**Fake bug:** saving fails — quantity field validation missing (simple, deliberately reproducible).
+
+| # | Actor | Action |
+|---|-------|--------|
+| 1 | Tester | Files the bug — **deliberately omits the URL** |
+| 2 | Tester | Assigns to `AI_agent` |
+| 3 | Scheduler | Detects new assignment to `AI_agent` (5-min poll) |
+| 4 | DefectEnricher (ollama) | Checks against completeness checklist → **critical gap: missing URL** |
+| 5 | Gatekeeper | Posts gap list as a comment, reassigns back to the tester |
+| 6 | Tester | Adds the URL, reassigns to `AI_agent` |
+| 7 | DefectEnricher (ollama) | Now complete enough — fills in minor gaps (selector, expected/actual) |
+| 8 | Gatekeeper | Posts enriched comment, reassigns to the developer |
+| 9 | "Developer" (manual step in demo) | Fixes the bug, sets status to "Retest", reassigns to `AI_agent` |
+| 10 | *(deployment window assumed closed)* | — |
+| 11 | Scheduler | Post-deployment-window poll finds status "Retest" + assignee `AI_agent` |
+| 12 | Gatekeeper | Classifies as a complex case (CRUD — adding products) → comments "please provide a fresh URL for retest", reassigns to tester |
+| 13 | Tester | Adds the URL in a comment, reassigns to `AI_agent` |
+| 14 | PlaywrightWriter + Playwright (Option B) | Executes the retest, documents with screenshots |
+| 15 | Gatekeeper | Result is positive → comments "please verify and close", reassigns to tester |
+
+**Why this scenario:** it exercises the gatekeeper twice (pre-dev and post-fix), the scheduler twice (new-bug polling and post-deployment-window polling), enrichment twice (first incomplete pass, second pass after gap-filling), and the retest pipeline once — covering the full loop in a single, demonstrable story. Negative/failing retest paths are intentionally out of scope for the first full demo — happy path first, edge cases later if there's appetite.
+
+**Implementation note:** this table is the target spec for Sprint 4 (gatekeeper + scheduler + Jira Updater) and the README "see it in action" section. Each row maps to a piece of code we either already have (DefectEnricher, PlaywrightWriter) or need to build (Scheduler, Gatekeeper logic, JiraUpdater comment/reassignment).
