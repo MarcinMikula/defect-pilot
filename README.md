@@ -1,12 +1,12 @@
 # 🛩️ defect-pilot
 
-> AI-powered QA gatekeeper — enriches bug reports, enforces quality standards,
-> generates Playwright retest scripts, and closes the bug lifecycle loop automatically.
+> AI-powered QA gatekeeper for Jira + Salesforce — enriches bug reports,
+> enforces completeness standards, and demonstrates AI-assisted retest execution.
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue)
 ![Playwright](https://img.shields.io/badge/Playwright-latest-green)
 ![Jira](https://img.shields.io/badge/Jira-Cloud-blue)
-![AI](https://img.shields.io/badge/AI-Ollama%20%7C%20Anthropic-purple)
+![AI](https://img.shields.io/badge/AI-Ollama%20%7C%20OpenAI-purple)
 ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-black)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
@@ -91,33 +91,77 @@ Tester files bug → assigns to AI_agent in Jira
 
 ---
 
+## 🎬 See it in action — full demo scenario
+
+A complete walkthrough using one fake business requirement and one fake bug, exercising every part of the pipeline.
+
+**Requirement:** user can add products with a quantity to a Salesforce Opportunity.
+**Bug:** saving fails — quantity field validation missing.
+
+| # | Actor | Action |
+|---|-------|--------|
+| 1 | Tester | Files the bug — *deliberately omits the URL* |
+| 2 | Tester | Assigns to `AI_agent` |
+| 3 | Scheduler | Detects the new assignment (5-min poll) |
+| 4 | DefectEnricher | Checks the completeness checklist → **critical gap: missing URL** |
+| 5 | Gatekeeper | Posts the gap list as a comment, reassigns back to the tester |
+| 6 | Tester | Adds the URL, reassigns to `AI_agent` |
+| 7 | DefectEnricher | Now complete enough — fills in minor gaps (selector, expected/actual) |
+| 8 | Gatekeeper | Posts the enriched comment, reassigns to the developer |
+| 9 | Developer | Fixes the bug, sets status to "Retest", reassigns to `AI_agent` |
+| 10 | Scheduler | Post-deployment-window poll finds status "Retest" + assignee `AI_agent` |
+| 11 | Gatekeeper | Classifies it as a complex case (CRUD) → asks tester for a fresh URL |
+| 12 | Tester | Adds the URL in a comment, reassigns to `AI_agent` |
+| 13 | PlaywrightWriter | Generates and runs the retest, documents with screenshots |
+| 14 | Gatekeeper | Result is positive → comments "please verify and close", reassigns to tester |
+
+This single story exercises the gatekeeper twice, the scheduler twice, enrichment twice, and the retest pipeline once — the full loop, happy path, end to end.
+
+---
+
+## ⚖️ Honest scope: what this project is, and isn't
+
+**The gatekeeper (enrichment + completeness checking) is the real value here.** It catches incomplete bug reports before they waste a developer's time, and it's genuinely faster than the manual alternative — a tester gets specific, actionable feedback instead of a ticket bounced back with no explanation.
+
+**The retest module is a proof-of-concept, not a production solution — and that's a deliberate, stated choice.** For a simple retest, a tester clicking through the app by hand is faster than this pipeline (enrichment + AI script generation + Playwright execution). For a complex retest needing fresh test data, preparing that data by hand is *also* faster than describing it to a tool that then has to operate the same UI anyway.
+
+What this module *does* demonstrate, end to end: a bug report can be read by AI, turned into structured technical context, turned into a generated Playwright script, executed against a real browser, and documented with screenshots — without a human writing a single line of test code. That's a real technical capability worth showing.
+
+**Where retest automation actually pays off** is regression suites (the same test run hundreds of times across releases) and self-healing frameworks that adapt when selectors break — not one-off retests of a single reported bug. That's exactly the gap this project's structured enrichment output is designed to feed:
+
+- [`qa-automation-framework`](#) — POM/SOM patterns for Salesforce and general web apps
+- `PhoenixQA` *(planned)* — self-healing selector framework
+
+Combined, gatekeeper (defect-pilot) + POM/self-healing (qa-automation-framework + PhoenixQA) solve two separate real problems: *is this bug report good enough to act on*, and *how do we keep automated tests working as the UI changes*. Each tool does one thing well.
+
+---
+
 ## 🔒 Privacy-first AI design
 
 Many QA teams work under NDAs or data residency requirements.
 **Jira tickets are documentation — they can't leave the machine without explicit consent.**
 
-defect-pilot solves this with a **pluggable AI provider** and a **two-stage data policy**:
+defect-pilot uses a **two-stage data policy**:
 
 | Stage | Provider | Data leaves machine? |
 |-------|----------|---------------------|
 | Enrichment (analysis) | `ollama` (local) | ❌ Never |
-| Script generation | `gemini` (cloud) | ✅ Yes — explicit consent required |
+| Script generation | `openai` (cloud) | ✅ Yes — explicit consent required |
 
-**Enrichment is always local.** Script generation via Gemini is opt-in:
+**Enrichment is always local.** Script generation via OpenAI is opt-in:
 
 ```env
 SCRIPT_GENERATION=local   # Option C — deterministic template, no AI, fully private
-SCRIPT_GENERATION=cloud   # Option B — Gemini generates full working script
+SCRIPT_GENERATION=cloud   # Option B — OpenAI generates a full working script
 ```
 
-When `cloud` is set, CLI shows an explicit warning and requires confirmation before sending data.
+When `cloud` is set, the CLI shows an explicit warning and requires confirmation before sending data.
 
 | Provider | Role | Data leaves machine? |
 |----------|------|---------------------|
 | `ollama` | Enrichment — always local | ❌ Never |
-| `gemini` | Script generation (Option B) | ✅ Yes — opt-in |
+| `openai` | Script generation (Option B) | ✅ Yes — opt-in |
 | `anthropic` | Alternative enrichment provider | ✅ Yes |
-| `openai` | _(planned)_ | ✅ Yes |
 
 ---
 
@@ -133,14 +177,13 @@ defect-pilot/
 │   ├── base_provider.py      # Abstract base — add new providers in one file
 │   ├── anthropic_provider.py # Claude (vision supported)
 │   ├── ollama_provider.py    # Local LLM (vision: model-dependent)
-│   ├── gemini_provider.py    # Gemini — script generation (Sprint 5)
+│   ├── openai_provider.py    # OpenAI — script generation (Option B)
 │   └── provider_factory.py   # Instantiates provider from config
 ├── retest/
-│   ├── playwright_writer.py  # Script generator — Option C (local) or Option B (Gemini)
+│   ├── playwright_writer.py  # Script generator — Option C (local) or Option B (OpenAI)
 │   ├── shared/
 │   │   └── sf_login.py       # Salesforce Lightning login helper
 │   └── scripts/              # Generated retest scripts (per issue)
-│       └── retest_STWA_9.py  # Example generated script
 ├── db/
 │   └── defect_store.py       # SQLite — local defect lifecycle tracking
 ├── config/
@@ -203,10 +246,9 @@ ANTHROPIC_API_KEY=sk-ant-...
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llava
 
-# Gemini (for script generation — Option B)
-# Free tier: https://aistudio.google.com/apikey
-GEMINI_API_KEY=your-key-here
-GEMINI_MODEL=gemini-2.0-flash
+# OpenAI (for script generation — Option B)
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
 
 # Jira
 JIRA_BASE_URL=https://yourcompany.atlassian.net
@@ -220,7 +262,7 @@ SF_USERNAME=user@instance.com
 SF_PASSWORD=your-sf-password
 
 # Retest configuration
-SCRIPT_GENERATION=cloud      # "local" = Option C (private), "cloud" = Option B (Gemini)
+SCRIPT_GENERATION=cloud      # "local" = Option C (private), "cloud" = Option B (OpenAI)
 RETEST_URL=                  # override stale record URL from bug report
 SUPPORTED_ISSUE_TYPES=bug,błąd,defect,error,problem
 ```
@@ -240,15 +282,15 @@ SUPPORTED_ISSUE_TYPES=bug,błąd,defect,error,problem
 - Known limitation: llava occasionally hallucinates URLs or element names when data is missing
 - Generated scripts mark all AI-inferred selectors with `# TODO: verify` — always check before running
 
-**Gemini (cloud) — used for script generation:**
-- Free tier available at https://aistudio.google.com/apikey — no credit card required
+**OpenAI (cloud) — used for script generation:**
+- Transparent pay-as-you-go billing, ~$0.15/1M input tokens with `gpt-4o-mini`
 - Generates complete, working Playwright scripts with meaningful assertions
 - Data sent: enriched defect data (steps, URL, expected/actual, UI elements) — not raw Jira ticket
 - Requires explicit confirmation in CLI before sending
 
 **Script generation modes:**
 - `SCRIPT_GENERATION=local` — Option C: deterministic template, no AI, fully private. Produces a skeleton that requires manual assertion writing. Good for air-gapped environments.
-- `SCRIPT_GENERATION=cloud` — Option B: Gemini generates complete script with assertions. Recommended for quality.
+- `SCRIPT_GENERATION=cloud` — Option B: OpenAI generates a complete script with assertions. Recommended for quality.
 
 ---
 
@@ -260,9 +302,9 @@ SUPPORTED_ISSUE_TYPES=bug,błąd,defect,error,problem
 | Sprint 1 | Jira Reader — ADF parsing, attachments, comments, issue links | ✅ Done |
 | Sprint 2 | AI Enricher — multimodal (text + vision), bilingual, linked requirements | ✅ Done |
 | Sprint 3 | Playwright Writer — Option C (deterministic template, SF login) | ✅ Done |
-| Sprint 3a | Script generation evaluation — Option C vs B, decision: Gemini for Option B | ✅ Done |
-| Sprint 4 | Jira Updater + Gatekeeper + Scheduler (AI_agent flow) | 🔄 Next |
-| Sprint 5 | Option B (Gemini script generation) + Allure + CLI polish + demo GIF | ⏳ Planned |
+| Sprint 3a | Script generation evaluation — Option C vs B, OpenAI integration | ✅ Done |
+| Sprint 4 | Jira Updater + Gatekeeper + Scheduler — full demo scenario | 🔄 Next |
+| Sprint 5 | CLI polish, Allure reports, demo recording | ⏳ Planned |
 
 ---
 
